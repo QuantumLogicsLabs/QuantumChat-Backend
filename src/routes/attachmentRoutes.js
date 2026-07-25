@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { uploadAttachment, downloadAttachment } from '../controllers/attachmentController.js';
 import { requireAuth } from '../middleware/auth.js';
+import { apiLimiter } from '../middleware/rateLimiter.js';
 import { upload } from '../middleware/upload.js';
 
 const router = Router();
 
+router.use(apiLimiter);
 router.use(requireAuth);
 router.post(
   '/',

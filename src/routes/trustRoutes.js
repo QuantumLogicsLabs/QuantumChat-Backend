@@ -5,8 +5,8 @@ import { getBlindnessReport } from '../services/blindnessStats.js';
 
 const router = Router();
 
-router.use(requireAuth);
 router.use(apiLimiter);
+router.use(requireAuth);
 
 router.get('/blindness', (req, res) => {
   res.json({ success: true, data: getBlindnessReport() });

@@ -14,8 +14,8 @@ import { apiLimiter } from '../middleware/rateLimiter.js';
 
 const router = Router();
 
-router.use(requireAuth);
 router.use(apiLimiter);
+router.use(requireAuth);
 router.post('/', sendMessage);
 router.post('/quantum-ai-response', publishQuantumAIDirectResponse);
 router.get('/:messageId/forward-check', checkForwardAllowed);

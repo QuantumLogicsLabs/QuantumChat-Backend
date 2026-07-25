@@ -97,7 +97,7 @@ See `.github/BRANCH_PROTECTION.md` for required checks.
 
 ## Deploying to Vercel
 
-Deploy this repo directly with **Root Directory left blank**. Required env vars: `MONGODB_URI`, `JWT_SECRET`.
+Static Vite build — Vercel's zero-config detection handles this natively, no `vercel.json` needed. Set `VITE_API_URL` in the project's Environment Variables to your deployed backend's URL. See the [root README](../README.md#deploying-to-vercel) for backend-side deployment notes (Socket.IO and attachments don't work the same way on a serverless backend).
 
 ## Community
 

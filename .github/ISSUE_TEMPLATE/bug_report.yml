@@ -1,5 +1,9 @@
 name: Bug report
+<<<<<<< HEAD
 description: Report a backend defect
+=======
+description: Report a frontend defect
+>>>>>>> 9d2bd3842e9cc45c912ac09908bd70f02464070f
 title: "[bug]: "
 labels: ["bug"]
 body:
@@ -7,17 +11,23 @@ body:
     id: description
     attributes:
       label: Description
+<<<<<<< HEAD
       description: What went wrong?
+=======
+>>>>>>> 9d2bd3842e9cc45c912ac09908bd70f02464070f
     validations:
       required: true
   - type: textarea
     id: reproduce
     attributes:
       label: Steps to reproduce
+<<<<<<< HEAD
       placeholder: |
         1.
         2.
         3.
+=======
+>>>>>>> 9d2bd3842e9cc45c912ac09908bd70f02464070f
     validations:
       required: true
   - type: textarea
@@ -27,10 +37,16 @@ body:
     validations:
       required: true
   - type: input
+<<<<<<< HEAD
     id: version
     attributes:
       label: Environment
       description: Node version, OS, deployment (local / Vercel / other)
+=======
+    id: browser
+    attributes:
+      label: Browser / OS
+>>>>>>> 9d2bd3842e9cc45c912ac09908bd70f02464070f
     validations:
       required: false
   - type: checkboxes

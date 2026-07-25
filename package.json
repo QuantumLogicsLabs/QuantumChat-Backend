@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
+    "build": "node -e \"console.log('backend: no frontend build step')\"",
     "test": "node --test --test-concurrency=1 \"test/security/**/*.test.js\"",
     "test:e2e-crypto": "node --test --test-concurrency=1 test/security/e2e-ciphertext-confidentiality.test.js test/security/e2e-x5-invariants.test.js",
     "test:security:x5": "node --test --test-concurrency=1 test/security/e2e-x5-invariants.test.js",

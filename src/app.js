@@ -66,13 +66,20 @@ export function createApp() {
         // Deny without throwing — avoids turning CORS misses into HTTP 500.
         return callback(null, false);
       },
+      methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id'],
+      optionsSuccessStatus: 204,
     })
   );
   app.use(express.json({ limit: '100kb' }));
 
   app.get('/api/health', (req, res) => res.json({ success: true, data: { status: 'ok' } }));
 
-  app.use('/api/auth', authLimiter, authRoutes);
+  // Skip rate limiting on CORS preflight — OPTIONS must always be cheap/fast.
+  app.use('/api/auth', (req, res, next) => {
+    if (req.method === 'OPTIONS') return next();
+    return authLimiter(req, res, next);
+  }, authRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/messages', messageRoutes);
   app.use('/api/attachments', attachmentRoutes);

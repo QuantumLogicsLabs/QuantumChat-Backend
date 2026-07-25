@@ -1,0 +1,48 @@
+name: Crypto Static Guards
+
+# Client-side anti-regression checks for E2E X5 call signaling and key handling.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  crypto-static:
+    name: Crypto Static Guards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Forbid plaintext WebRTC signaling emits
+        run: |
+          set -euo pipefail
+          # Call socket emits must carry sealed envelopes, not raw SDP/ICE.
+          if grep -RInE --include='*.{js,jsx,ts,tsx}' \
+            "emit\(['\"]call:(offer|answer|ice|invite|accept|reject|hangup)['\"].*\b(sdp|candidate)\b" \
+            src; then
+            echo "::error::Raw SDP/ICE fields must not appear on call:* emits — use X5 envelopes."
+            exit 1
+          fi
+          echo "OK: no plaintext call signaling emits detected"
+
+      - name: Require sealed call envelope helpers
+        run: |
+          set -euo pipefail
+          # Backend validates call signaling via sealed-envelope helpers (client hook lives in frontend).
+          test -f src/utils/callEnvelope.js
+          grep -q "isSealedEnvelope\|hasForbiddenPlaintextSignaling" src/utils/callEnvelope.js
+          echo "OK: callEnvelope.js enforces sealed call envelopes"
+
+      - name: Forbid private key console logging
+        run: |
+          set -euo pipefail
+          if grep -RInE --include='*.{js,jsx,ts,tsx}' \
+            "console\.(log|debug|info|warn|error)\([^)]*(secretKey|privateKey|seed)" \
+            src; then
+            echo "::error::Private key material must never be logged."
+            exit 1
+          fi
+          echo "OK: no private-key console logging detected"

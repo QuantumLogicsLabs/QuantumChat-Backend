@@ -69,6 +69,9 @@ function toClientMessage(doc) {
       user: e.user?.toString?.() || String(e.user),
     }));
   }
+  if (typeof message.content === 'string') {
+    message.content = message.content;
+  }
   return message;
 }
 
@@ -295,7 +298,7 @@ export async function sendMessage(req, res) {
 
     const message = await Message.findById(created._id)
       .populate('attachment', ATTACHMENT_POPULATE)
-      .populate('replyTo', 'from forRecipient forSender envelopes group createdAt');
+      .populate('replyTo', 'from forRecipient forSender envelopes group content createdAt');
     const payload = toClientMessage(message);
 
     const io = req.app.get('io');
@@ -402,7 +405,7 @@ export async function getConversation(req, res) {
       .sort({ createdAt: -1 })
       .limit(limit + 1)
       .populate('attachment', ATTACHMENT_POPULATE)
-      .populate('replyTo', 'from forRecipient forSender envelopes group createdAt');
+      .populate('replyTo', 'from forRecipient forSender envelopes group content createdAt');
 
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
@@ -599,7 +602,7 @@ export async function reactToMessage(req, res) {
     await message.save();
     const populated = await Message.findById(message._id)
       .populate('attachment', ATTACHMENT_POPULATE)
-      .populate('replyTo', 'from forRecipient forSender envelopes group createdAt');
+      .populate('replyTo', 'from forRecipient forSender envelopes group content createdAt');
     const payload = toClientMessage(populated);
 
     const io = req.app.get('io');
@@ -630,14 +633,31 @@ export async function editMessage(req, res) {
     }
 
     if (message.group) {
-      if (!Array.isArray(envelopes) || envelopes.length < 2) {
-        return res.status(400).json({ success: false, error: 'Group edit requires envelopes for each member' });
+      const Group = (await import('../models/Group.js')).default;
+      const group = await Group.findById(message.group);
+      const isPublic = group?.visibility === 'public';
+      if (isPublic) {
+        const { content: contentRaw } = req.body;
+        if (typeof contentRaw !== 'string' || !contentRaw.trim()) {
+          return res.status(400).json({
+            success: false,
+            error: 'Public group edit requires non-empty content',
+          });
+        }
+        message.content = contentRaw.trim().slice(0, 8000);
+        message.envelopes = undefined;
+        message.markModified('content');
+      } else {
+        if (!Array.isArray(envelopes) || envelopes.length < 2) {
+          return res.status(400).json({ success: false, error: 'Group edit requires envelopes for each member' });
+        }
+        message.envelopes = envelopes.map((item) => ({
+          user: item.user,
+          ...normalizeEnvelope(item),
+        }));
+        message.content = undefined;
+        message.markModified('envelopes');
       }
-      message.envelopes = envelopes.map((item) => ({
-        user: item.user,
-        ...normalizeEnvelope(item),
-      }));
-      message.markModified('envelopes');
     } else {
       if (!validateEnvelope(forRecipient) || !validateEnvelope(forSender)) {
         return res.status(400).json({
@@ -654,7 +674,7 @@ export async function editMessage(req, res) {
 
     const populated = await Message.findById(message._id)
       .populate('attachment', ATTACHMENT_POPULATE)
-      .populate('replyTo', 'from forRecipient forSender envelopes group createdAt');
+      .populate('replyTo', 'from forRecipient forSender envelopes group content createdAt');
     const payload = toClientMessage(populated);
 
     const io = req.app.get('io');

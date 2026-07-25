@@ -1,8 +1,16 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
+<<<<<<< HEAD
     url: https://github.com/QuantumLogicsLabs/QuantumChat-Backend/security/advisories/new
     about: Privately report a security issue — do not file a public bug.
   - name: Frontend bugs
     url: https://github.com/QuantumLogicsLabs/QuantumChat-Frontend/issues
     about: Client UI and on-device crypto issues belong in QuantumChat-Frontend.
+=======
+    url: https://github.com/QuantumLogicsLabs/QuantumChat-Frontend/security/advisories/new
+    about: Privately report a security issue — do not file a public bug.
+  - name: Backend bugs
+    url: https://github.com/QuantumLogicsLabs/QuantumChat-Backend/issues
+    about: API and Socket.IO issues belong in QuantumChat-Backend.
+>>>>>>> 9d2bd3842e9cc45c912ac09908bd70f02464070f

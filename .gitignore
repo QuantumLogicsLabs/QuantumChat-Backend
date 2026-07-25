@@ -1,5 +1,10 @@
 node_modules/
 .env
-npm-debug.log*
-uploads/
-.test-uploads/
+.env.local
+.env.production
+.env.*.local
+
+# Local gitleaks binary
+gitleaks.exe
+gitleaks_*.zip
+

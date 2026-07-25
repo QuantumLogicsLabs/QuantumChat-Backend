@@ -49,6 +49,8 @@ const messageSchema = new mongoose.Schema(
     forSender: { type: envelopeSchema },
     group: { type: mongoose.Schema.Types.ObjectId, ref: 'Group', index: true },
     envelopes: { type: [memberEnvelopeSchema], default: undefined },
+    /** Plaintext body for public (non-E2E) group messages */
+    content: { type: String, maxlength: 8000 },
     attachment: { type: mongoose.Schema.Types.ObjectId, ref: 'Attachment' },
     reactions: { type: [reactionSchema], default: [] },
     replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Message' },
@@ -91,8 +93,19 @@ messageSchema.index({ expiresAt: 1 }, { sparse: true });
 messageSchema.pre('validate', function ensureShape(next) {
   const isGroup = Boolean(this.group);
   if (isGroup) {
-    if (!Array.isArray(this.envelopes) || this.envelopes.length < 2) {
-      return next(new Error('Group messages require envelopes for each member'));
+    const hasContent = typeof this.content === 'string' && this.content.trim().length > 0;
+    const hasEnvelopes = Array.isArray(this.envelopes) && this.envelopes.length >= 2;
+    if (hasContent && !hasEnvelopes) {
+      // Public group plaintext path
+      this.envelopes = undefined;
+      this.content = this.content.trim().slice(0, 8000);
+    } else if (hasEnvelopes) {
+      // Private encrypted path
+      this.content = undefined;
+    } else {
+      return next(
+        new Error('Group messages require envelopes (private) or non-empty content (public)')
+      );
     }
     this.to = undefined;
     this.forRecipient = undefined;
@@ -103,6 +116,7 @@ messageSchema.pre('validate', function ensureShape(next) {
     }
     this.group = undefined;
     this.envelopes = undefined;
+    this.content = undefined;
   }
   next();
 });

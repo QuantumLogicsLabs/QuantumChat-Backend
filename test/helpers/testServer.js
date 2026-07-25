@@ -82,11 +82,11 @@ export async function login(base, email, password) {
   return { status: res.status, body, token: body?.data?.token };
 }
 
-export async function createGroup(base, token, { name, memberIds, description }) {
+export async function createGroup(base, token, { name, memberIds, description, visibility, joinPolicy }) {
   const res = await fetch(`${base}/groups`, {
     method: 'POST',
     headers: authHeaders(token),
-    body: JSON.stringify({ name, memberIds, description }),
+    body: JSON.stringify({ name, memberIds, description, visibility, joinPolicy }),
   }).then((r) => r.json());
   if (!res.success) throw new Error(`createGroup failed: ${res.error}`);
   return res.data;
@@ -96,7 +96,7 @@ export async function sendGroupMessage(base, token, groupId, envelopes, extras =
   const res = await fetch(`${base}/groups/${groupId}/messages`, {
     method: 'POST',
     headers: authHeaders(token),
-    body: JSON.stringify({ envelopes, ...extras }),
+    body: JSON.stringify(envelopes ? { envelopes, ...extras } : { ...extras }),
   });
   const body = await res.json().catch(() => ({}));
   return { status: res.status, body };

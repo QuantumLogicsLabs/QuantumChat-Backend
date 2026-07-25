@@ -1,5 +1,9 @@
 name: Feature request
+<<<<<<< HEAD
 description: Propose a backend enhancement
+=======
+description: Propose a frontend enhancement
+>>>>>>> 9d2bd3842e9cc45c912ac09908bd70f02464070f
 title: "[feat]: "
 labels: ["enhancement"]
 body:
@@ -7,13 +11,17 @@ body:
     id: problem
     attributes:
       label: Problem
+<<<<<<< HEAD
       description: What problem does this solve?
+=======
+>>>>>>> 9d2bd3842e9cc45c912ac09908bd70f02464070f
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
       label: Proposal
+<<<<<<< HEAD
       description: Desired API / behavior. Note any E2E X5 impact.
     validations:
       required: true
@@ -23,3 +31,8 @@ body:
       label: Alternatives considered
     validations:
       required: false
+=======
+      description: Include any impact on E2E crypto or key handling.
+    validations:
+      required: true
+>>>>>>> 9d2bd3842e9cc45c912ac09908bd70f02464070f

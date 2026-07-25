@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import mongoose from 'mongoose';
 import Group from '../models/Group.js';
+import GroupJoinRequest from '../models/GroupJoinRequest.js';
 import User from '../models/User.js';
 import Message from '../models/Message.js';
 import { resolveUploadPath, safeImageContentType } from '../middleware/upload.js';
@@ -61,6 +62,9 @@ function toClientMessage(doc) {
       user: e.user?.toString?.() || String(e.user),
     }));
   }
+  if (typeof message.content === 'string') {
+    message.content = message.content;
+  }
   message.mentionedUserIds = (message.mentionedUserIds || []).map((id) => String(id));
   message.pollVotes = (message.pollVotes || []).map((v) => ({
     user: String(v.user),
@@ -93,25 +97,32 @@ function makeInviteCode() {
 
 export async function createGroup(req, res) {
   try {
-    const { name, memberIds, description } = req.body;
+    const { name, memberIds, description, visibility: visibilityRaw, joinPolicy: joinPolicyRaw } = req.body;
     if (!name || typeof name !== 'string' || name.trim().length < 2) {
       return res.status(400).json({ success: false, error: 'Group name must be at least 2 characters' });
     }
-    if (!Array.isArray(memberIds) || memberIds.length < 1) {
-      return res.status(400).json({ success: false, error: 'Select at least one other member' });
+
+    const visibility = visibilityRaw === 'public' ? 'public' : 'private';
+    let joinPolicy = 'invite';
+    if (visibility === 'public') {
+      joinPolicy = joinPolicyRaw === 'request' ? 'request' : 'open';
     }
 
-    const uniqueIds = [...new Set(memberIds.map(String))].filter((id) => id !== req.user._id.toString());
-    if (uniqueIds.length < 1) {
+    const requestedIds = Array.isArray(memberIds) ? memberIds : [];
+    const uniqueIds = [...new Set(requestedIds.map(String))].filter((id) => id !== req.user._id.toString());
+
+    if (visibility === 'private' && uniqueIds.length < 1) {
       return res.status(400).json({ success: false, error: 'Select at least one other member' });
     }
     if (uniqueIds.some((id) => !mongoose.isValidObjectId(id))) {
       return res.status(400).json({ success: false, error: 'Invalid member id' });
     }
 
-    const found = await User.find({ _id: { $in: uniqueIds } }).select('_id');
-    if (found.length !== uniqueIds.length) {
-      return res.status(400).json({ success: false, error: 'One or more members were not found' });
+    if (uniqueIds.length) {
+      const found = await User.find({ _id: { $in: uniqueIds } }).select('_id');
+      if (found.length !== uniqueIds.length) {
+        return res.status(400).json({ success: false, error: 'One or more members were not found' });
+      }
     }
 
     const members = [req.user._id, ...uniqueIds];
@@ -121,12 +132,263 @@ export async function createGroup(req, res) {
       createdBy: req.user._id,
       members,
       admins: [req.user._id],
+      visibility,
+      joinPolicy,
     });
 
     const populated = await loadGroup(group._id);
     const payload = populated.toPublicJSON();
     emitToMembers(req.app.get('io'), members, 'group:new', payload);
     res.status(201).json({ success: true, data: payload });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function discoverGroups(req, res) {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 50);
+    const filter = {
+      visibility: 'public',
+      members: { $ne: req.user._id },
+    };
+    if (q) {
+      filter.$or = [
+        { name: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
+        { description: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
+      ];
+    }
+
+    const groups = await Group.find(filter)
+      .sort({ updatedAt: -1 })
+      .limit(limit)
+      .select('name description members photoPath visibility joinPolicy createdAt updatedAt createdBy');
+
+    const groupIds = groups.map((g) => g._id);
+    const pending = await GroupJoinRequest.find({
+      group: { $in: groupIds },
+      user: req.user._id,
+      status: 'pending',
+    }).select('group');
+    const pendingSet = new Set(pending.map((r) => String(r.group)));
+
+    res.json({
+      success: true,
+      data: groups.map((g) => ({
+        id: g._id,
+        name: g.name,
+        description: g.description || '',
+        memberCount: (g.members || []).length,
+        hasPhoto: Boolean(g.photoPath),
+        visibility: 'public',
+        joinPolicy: g.joinPolicy === 'request' ? 'request' : 'open',
+        joinRequestPending: pendingSet.has(String(g._id)),
+        createdAt: g.createdAt,
+        updatedAt: g.updatedAt,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function joinPublicGroup(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid group id' });
+    }
+    const group = await Group.findById(id);
+    if (!group) return res.status(404).json({ success: false, error: 'Group not found' });
+    if (group.visibility !== 'public') {
+      return res.status(400).json({ success: false, error: 'Only public groups can be joined this way' });
+    }
+    if (group.joinPolicy !== 'open') {
+      return res.status(400).json({
+        success: false,
+        error: 'This group requires a join request',
+      });
+    }
+    if (group.isMember(req.user._id)) {
+      const populated = await loadGroup(group._id);
+      return res.json({ success: true, data: populated.toPublicJSON(), alreadyMember: true });
+    }
+    group.members.push(req.user._id);
+    await group.save();
+    await GroupJoinRequest.deleteOne({ group: group._id, user: req.user._id });
+    const populated = await loadGroup(group._id);
+    const payload = populated.toPublicJSON();
+    emitToMembers(req.app.get('io'), group.members, 'group:updated', payload);
+    emitToMembers(req.app.get('io'), [req.user._id], 'group:new', payload);
+    res.json({ success: true, data: payload });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function createJoinRequest(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid group id' });
+    }
+    const group = await Group.findById(id);
+    if (!group) return res.status(404).json({ success: false, error: 'Group not found' });
+    if (group.visibility !== 'public' || group.joinPolicy !== 'request') {
+      return res.status(400).json({
+        success: false,
+        error: 'This group does not accept join requests',
+      });
+    }
+    if (group.isMember(req.user._id)) {
+      return res.status(400).json({ success: false, error: 'Already a member' });
+    }
+
+    const existing = await GroupJoinRequest.findOne({ group: group._id, user: req.user._id });
+    if (existing) {
+      if (existing.status === 'pending') {
+        return res.json({
+          success: true,
+          data: { id: existing._id, status: 'pending', groupId: group._id },
+        });
+      }
+      existing.status = 'pending';
+      await existing.save();
+      return res.status(201).json({
+        success: true,
+        data: { id: existing._id, status: 'pending', groupId: group._id },
+      });
+    }
+
+    const created = await GroupJoinRequest.create({
+      group: group._id,
+      user: req.user._id,
+      status: 'pending',
+    });
+    res.status(201).json({
+      success: true,
+      data: { id: created._id, status: 'pending', groupId: group._id },
+    });
+  } catch (err) {
+    if (err?.code === 11000) {
+      return res.status(409).json({ success: false, error: 'Join request already exists' });
+    }
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function listJoinRequests(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid group id' });
+    }
+    const group = await Group.findById(id);
+    if (!group) return res.status(404).json({ success: false, error: 'Group not found' });
+    if (!group.isMember(req.user._id)) {
+      return res.status(403).json({ success: false, error: 'Not a group member' });
+    }
+    ensureAdmins(group);
+    if (!group.isAdmin(req.user._id)) {
+      return res.status(403).json({ success: false, error: 'Only admins can view join requests' });
+    }
+
+    const requests = await GroupJoinRequest.find({ group: group._id, status: 'pending' })
+      .sort({ createdAt: 1 })
+      .populate('user', 'username email avatarPath verified');
+
+    res.json({
+      success: true,
+      data: requests.map((r) => ({
+        id: r._id,
+        status: r.status,
+        createdAt: r.createdAt,
+        user: r.user?.toPublicJSON
+          ? r.user.toPublicJSON()
+          : {
+              id: r.user?._id || r.user,
+              username: r.user?.username,
+              email: r.user?.email,
+              hasAvatar: Boolean(r.user?.avatarPath),
+              verified: Boolean(r.user?.verified),
+            },
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function acceptJoinRequest(req, res) {
+  try {
+    const { id, userId } = req.params;
+    if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ success: false, error: 'Invalid id' });
+    }
+    const group = await Group.findById(id);
+    if (!group) return res.status(404).json({ success: false, error: 'Group not found' });
+    if (!group.isMember(req.user._id)) {
+      return res.status(403).json({ success: false, error: 'Not a group member' });
+    }
+    ensureAdmins(group);
+    if (!group.isAdmin(req.user._id)) {
+      return res.status(403).json({ success: false, error: 'Only admins can accept join requests' });
+    }
+
+    const request = await GroupJoinRequest.findOne({
+      group: group._id,
+      user: userId,
+      status: 'pending',
+    });
+    if (!request) {
+      return res.status(404).json({ success: false, error: 'Join request not found' });
+    }
+
+    if (!group.isMember(userId)) {
+      group.members.push(userId);
+      await group.save();
+    }
+    request.status = 'accepted';
+    await request.save();
+
+    const populated = await loadGroup(group._id);
+    const payload = populated.toPublicJSON();
+    emitToMembers(req.app.get('io'), group.members, 'group:updated', payload);
+    emitToMembers(req.app.get('io'), [userId], 'group:new', payload);
+    res.json({ success: true, data: payload });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function rejectJoinRequest(req, res) {
+  try {
+    const { id, userId } = req.params;
+    if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(userId)) {
+      return res.status(400).json({ success: false, error: 'Invalid id' });
+    }
+    const group = await Group.findById(id);
+    if (!group) return res.status(404).json({ success: false, error: 'Group not found' });
+    if (!group.isMember(req.user._id)) {
+      return res.status(403).json({ success: false, error: 'Not a group member' });
+    }
+    ensureAdmins(group);
+    if (!group.isAdmin(req.user._id)) {
+      return res.status(403).json({ success: false, error: 'Only admins can reject join requests' });
+    }
+
+    const request = await GroupJoinRequest.findOne({
+      group: group._id,
+      user: userId,
+      status: 'pending',
+    });
+    if (!request) {
+      return res.status(404).json({ success: false, error: 'Join request not found' });
+    }
+    request.status = 'rejected';
+    await request.save();
+    res.json({ success: true, data: { groupId: group._id, userId, status: 'rejected' } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -222,7 +484,14 @@ export async function updateGroup(req, res) {
       return res.status(403).json({ success: false, error: 'Only admins can update group settings' });
     }
 
-    const { name, description, onlyAdminsCanPost, onlyAdminsCanAddMembers, quantumAI } = req.body;
+    const { name, description, onlyAdminsCanPost, onlyAdminsCanAddMembers, quantumAI, joinPolicy, visibility } =
+      req.body;
+    if (visibility != null) {
+      return res.status(400).json({
+        success: false,
+        error: 'Group visibility cannot be changed after creation',
+      });
+    }
     if (name != null) {
       if (typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 60) {
         return res.status(400).json({ success: false, error: 'Group name must be 2-60 characters' });
@@ -237,6 +506,21 @@ export async function updateGroup(req, res) {
     }
     if (typeof onlyAdminsCanPost === 'boolean') group.onlyAdminsCanPost = onlyAdminsCanPost;
     if (typeof onlyAdminsCanAddMembers === 'boolean') group.onlyAdminsCanAddMembers = onlyAdminsCanAddMembers;
+    if (joinPolicy != null) {
+      if (group.visibility !== 'public') {
+        return res.status(400).json({
+          success: false,
+          error: 'Join policy can only be changed on public groups',
+        });
+      }
+      if (!['open', 'request'].includes(joinPolicy)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Public joinPolicy must be open or request',
+        });
+      }
+      group.joinPolicy = joinPolicy;
+    }
     if (quantumAI && typeof quantumAI === 'object') {
       const next = {
         enabled: typeof quantumAI.enabled === 'boolean' ? quantumAI.enabled : group.quantumAI?.enabled,
@@ -590,8 +874,16 @@ export async function deleteGroup(req, res) {
 export async function sendGroupMessage(req, res) {
   try {
     const { groupId } = req.params;
-    const { envelopes, attachmentId, replyTo, kind, mentionedUserIds, expiresInSeconds, forwardPolicy: forwardPolicyRaw } =
-      req.body;
+    const {
+      envelopes,
+      content: contentRaw,
+      attachmentId,
+      replyTo,
+      kind,
+      mentionedUserIds,
+      expiresInSeconds,
+      forwardPolicy: forwardPolicyRaw,
+    } = req.body;
     if (!mongoose.isValidObjectId(groupId)) {
       return res.status(400).json({ success: false, error: 'Invalid group id' });
     }
@@ -606,6 +898,7 @@ export async function sendGroupMessage(req, res) {
       return res.status(403).json({ success: false, error: 'Only admins can post in this group' });
     }
 
+    const isPublic = group.visibility === 'public';
     const messageKind = ['text', 'announcement', 'poll', 'event', 'file', 'ai_note'].includes(kind)
       ? kind
       : 'text';
@@ -634,33 +927,46 @@ export async function sendGroupMessage(req, res) {
       replyToId = parent._id;
     }
 
-    if (!Array.isArray(envelopes) || envelopes.length < 2) {
-      return res.status(400).json({
-        success: false,
-        error: 'envelopes must include a sealed-box copy for each member',
-      });
-    }
-
     const memberSet = new Set(group.members.map((m) => m.toString()));
-    const normalized = [];
-    for (const item of envelopes) {
-      const userId = item?.user != null ? String(item.user) : '';
-      if (!memberSet.has(userId) || !mongoose.isValidObjectId(userId)) {
-        return res.status(400).json({ success: false, error: 'Envelope user must be a group member' });
-      }
-      if (!validateEnvelope(item)) {
-        return res.status(400).json({ success: false, error: 'Each envelope must be a valid sealed box' });
-      }
-      normalized.push({
-        user: userId,
-        ...normalizeEnvelope(item),
-      });
-    }
+    let normalized;
+    let content;
 
-    const covered = new Set(normalized.map((e) => String(e.user)));
-    for (const memberId of memberSet) {
-      if (!covered.has(memberId)) {
-        return res.status(400).json({ success: false, error: 'Missing sealed envelope for a group member' });
+    if (isPublic) {
+      if (typeof contentRaw !== 'string' || !contentRaw.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: 'Public group messages require non-empty content',
+        });
+      }
+      content = contentRaw.trim().slice(0, 8000);
+    } else {
+      if (!Array.isArray(envelopes) || envelopes.length < 2) {
+        return res.status(400).json({
+          success: false,
+          error: 'envelopes must include a sealed-box copy for each member',
+        });
+      }
+
+      normalized = [];
+      for (const item of envelopes) {
+        const userId = item?.user != null ? String(item.user) : '';
+        if (!memberSet.has(userId) || !mongoose.isValidObjectId(userId)) {
+          return res.status(400).json({ success: false, error: 'Envelope user must be a group member' });
+        }
+        if (!validateEnvelope(item)) {
+          return res.status(400).json({ success: false, error: 'Each envelope must be a valid sealed box' });
+        }
+        normalized.push({
+          user: userId,
+          ...normalizeEnvelope(item),
+        });
+      }
+
+      const covered = new Set(normalized.map((e) => String(e.user)));
+      for (const memberId of memberSet) {
+        if (!covered.has(memberId)) {
+          return res.status(400).json({ success: false, error: 'Missing sealed envelope for a group member' });
+        }
       }
     }
 
@@ -692,7 +998,7 @@ export async function sendGroupMessage(req, res) {
     const created = await Message.create({
       from: req.user._id,
       group: group._id,
-      envelopes: normalized,
+      ...(isPublic ? { content } : { envelopes: normalized }),
       attachment: attachmentId || undefined,
       replyTo: replyToId,
       kind: messageKind,
@@ -707,7 +1013,7 @@ export async function sendGroupMessage(req, res) {
 
     const message = await Message.findById(created._id)
       .populate('attachment', ATTACHMENT_POPULATE)
-      .populate('replyTo', 'from forRecipient forSender envelopes group createdAt kind');
+      .populate('replyTo', 'from forRecipient forSender envelopes group content createdAt kind');
     const payload = toClientMessage(message);
     const io = req.app.get('io');
     emitToMembers(io, [...memberSet], 'message:new', payload);
@@ -721,11 +1027,14 @@ export async function sendGroupMessage(req, res) {
     for (const mid of memberSet) {
       if (mid === senderId) continue;
       if (!isUserOnline(mid)) {
-        notifyUser(mid, { title: 'QuantumChat', body: 'New group message' }).catch(() => {});
+        notifyUser(mid, {
+          title: 'QuantumChat',
+          body: isPublic ? 'New public group message' : 'New group message',
+        }).catch(() => {});
       }
     }
 
-    incrementCiphertextsRelayed();
+    if (!isPublic) incrementCiphertextsRelayed();
     res.status(201).json({ success: true, data: payload });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -735,17 +1044,21 @@ export async function sendGroupMessage(req, res) {
 export async function publishQuantumAIGroupResponse(req, res) {
   try {
     const { groupId } = req.params;
-    const { content, contentHash, requestId, receipt, model } = req.body || {};
+    const { content, contentHash, requestId: requestIdRaw, receipt, model } = req.body || {};
+    const requestIdMatch = String(requestIdRaw || '').match(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
     if (
       !mongoose.isValidObjectId(groupId) ||
       !/^[0-9a-f]{64}$/i.test(contentHash || '') ||
-      !/^[0-9a-f-]{36}$/i.test(requestId || '') ||
+      !requestIdMatch ||
       typeof content !== 'string' ||
       !content.trim() ||
       content.length > 100_000
     ) {
       return res.status(400).json({ success: false, error: 'Invalid QuantumAI response payload' });
     }
+    const requestId = requestIdMatch[0].toLowerCase();
     const secret = process.env.QUANTUM_AI_SERVICE_SECRET;
     if (!secret || secret.length < 32) {
       return res.status(503).json({ success: false, error: 'QuantumAI service is not configured' });
@@ -788,14 +1101,18 @@ export async function publishQuantumAIGroupResponse(req, res) {
       return res.status(409).json({ success: false, error: 'Add QuantumAI to this group first' });
     }
     const memberSet = new Set(group.members.map(String));
-    const memberUsers = await User.find({ _id: { $in: [...memberSet] } }).select('_id publicKeys');
-    if (memberUsers.length !== memberSet.size || memberUsers.some((member) => !member.publicKeys?.length)) {
-      return res.status(409).json({ success: false, error: 'Every group member needs an encryption key' });
+    const isPublic = group.visibility === 'public';
+    let normalized;
+    if (!isPublic) {
+      const memberUsers = await User.find({ _id: { $in: [...memberSet] } }).select('_id publicKeys');
+      if (memberUsers.length !== memberSet.size || memberUsers.some((member) => !member.publicKeys?.length)) {
+        return res.status(409).json({ success: false, error: 'Every group member needs an encryption key' });
+      }
+      normalized = memberUsers.map((member) => ({
+        user: member._id,
+        ...sealForPublicKey(content, member.publicKeys[0]),
+      }));
     }
-    const normalized = memberUsers.map((member) => ({
-      user: member._id,
-      ...sealForPublicKey(content, member.publicKeys[0]),
-    }));
     if (await Message.exists({ 'aiMetadata.requestId': requestId })) {
       return res.status(409).json({ success: false, error: 'AI response already published' });
     }
@@ -815,7 +1132,7 @@ export async function publishQuantumAIGroupResponse(req, res) {
     const created = await Message.create({
       from: quantumAI._id,
       group: group._id,
-      envelopes: normalized,
+      ...(isPublic ? { content } : { envelopes: normalized }),
       kind: 'ai',
       aiMetadata: {
         contentHash: String(contentHash).toLowerCase(),
@@ -858,7 +1175,7 @@ export async function getGroupMessages(req, res) {
       .sort({ createdAt: -1 })
       .limit(limit + 1)
       .populate('attachment', ATTACHMENT_POPULATE)
-      .populate('replyTo', 'from forRecipient forSender envelopes group createdAt kind');
+      .populate('replyTo', 'from forRecipient forSender envelopes group content createdAt kind');
 
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
@@ -900,7 +1217,7 @@ export async function votePoll(req, res) {
     await message.save();
     const populated = await Message.findById(message._id)
       .populate('attachment', ATTACHMENT_POPULATE)
-      .populate('replyTo', 'from forRecipient forSender envelopes group createdAt kind');
+      .populate('replyTo', 'from forRecipient forSender envelopes group content createdAt kind');
     const payload = toClientMessage(populated);
     emitToMembers(req.app.get('io'), group.members, 'message:poll', payload);
     res.json({ success: true, data: payload });

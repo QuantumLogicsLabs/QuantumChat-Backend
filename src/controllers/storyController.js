@@ -158,11 +158,19 @@ export async function listStories(req, res) {
       .sort({ createdAt: -1 })
       .populate('user', 'username avatarPath');
 
+    const viewerId = String(req.user._id);
     const filtered = [];
     for (const story of stories) {
       const ownerId = String(story.user?._id || story.user);
       if (blocked.has(ownerId)) continue;
       if (await areUsersBlocked(req.user._id, ownerId)) continue;
+      // Sealed stories are only listed for viewers who have an envelope
+      // (otherwise the client can only show “no envelope for your keys”).
+      if (story.sealed) {
+        const envelopes = story.envelopes || [];
+        const allowed = envelopes.some((e) => String(e.user) === viewerId);
+        if (!allowed) continue;
+      }
       filtered.push({
         ...story.toPublicJSON(),
         user: {

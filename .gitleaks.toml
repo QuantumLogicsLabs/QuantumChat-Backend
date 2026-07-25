@@ -1,5 +1,5 @@
-# Gitleaks config for QuantumChat Backend
-title = "QuantumChat Backend"
+# Gitleaks config for QuantumChat Frontend
+title = "QuantumChat Frontend"
 
 [extend]
 useDefault = true

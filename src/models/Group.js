@@ -59,6 +59,22 @@ const groupSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    /** private = encrypted invite-only; public = plaintext, discoverable */
+    visibility: {
+      type: String,
+      enum: ['private', 'public'],
+      default: 'private',
+      index: true,
+    },
+    /**
+     * private groups use invite; public groups use open or request.
+     * invite is forced for private groups.
+     */
+    joinPolicy: {
+      type: String,
+      enum: ['invite', 'open', 'request'],
+      default: 'invite',
+    },
     quantumAI: {
       enabled: { type: Boolean, default: false },
       invocationPolicy: { type: String, enum: ['members', 'admins'], default: 'members' },
@@ -72,6 +88,7 @@ const groupSchema = new mongoose.Schema(
 );
 
 groupSchema.index({ members: 1 });
+groupSchema.index({ visibility: 1, updatedAt: -1 });
 
 groupSchema.methods.isMember = function isMember(userId) {
   return (this.members || []).some((m) => String(m._id || m) === String(userId));
@@ -118,6 +135,14 @@ groupSchema.methods.toPublicJSON = function toPublicJSON() {
     pinnedMessageIds: (this.pinnedMessageIds || []).map((id) => String(id)),
     onlyAdminsCanPost: Boolean(this.onlyAdminsCanPost),
     onlyAdminsCanAddMembers: Boolean(this.onlyAdminsCanAddMembers),
+    visibility: this.visibility === 'public' ? 'public' : 'private',
+    joinPolicy:
+      this.visibility === 'public'
+        ? this.joinPolicy === 'request'
+          ? 'request'
+          : 'open'
+        : 'invite',
+    memberCount: (this.members || []).length,
     quantumAI: {
       enabled: Boolean(this.quantumAI?.enabled),
       invocationPolicy: this.quantumAI?.invocationPolicy || 'members',
