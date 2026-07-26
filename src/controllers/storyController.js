@@ -186,6 +186,42 @@ export async function listStories(req, res) {
     res.status(500).json({ success: false, error: err.message });
   }
 }
+export async function getStoryById(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid story id' });
+    }
+    const story = await Story.findById(id).populate('user', 'username avatarPath');
+    if (!story || story.expiresAt <= new Date()) {
+      return res.status(404).json({ success: false, error: 'Story not found or expired' });
+    }
+    const ownerId = String(story.user?._id || story.user);
+    if (await areUsersBlocked(req.user._id, ownerId)) {
+      return res.status(403).json({ success: false, error: 'Not allowed' });
+    }
+    if (story.sealed) {
+      const envelopes = story.envelopes || [];
+      const allowed = envelopes.some((e) => String(e.user) === String(req.user._id));
+      if (!allowed) {
+        return res.status(404).json({ success: false, error: 'Story not found or expired' });
+      }
+    }
+    res.json({
+      success: true,
+      data: {
+        ...story.toPublicJSON(),
+        user: {
+          id: ownerId,
+          username: story.user?.username || 'User',
+          hasAvatar: Boolean(story.user?.avatarPath),
+        },
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
 
 export async function getStoryMedia(req, res) {
   try {

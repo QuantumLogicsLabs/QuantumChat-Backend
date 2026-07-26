@@ -7,6 +7,7 @@ import { areUsersBlocked } from './userController.js';
 import { resolveUploadPath } from '../middleware/upload.js';
 import User from '../models/User.js';
 import Group from '../models/Group.js';
+import Story from '../models/Story.js';
 import { sealForPublicKey } from '../utils/sealedBox.js';
 import { isUserOnline } from '../socket/index.js';
 import { notifyUser } from '../services/pushService.js';
@@ -46,6 +47,7 @@ function toClientMessage(doc) {
     };
   }
   if (message.group) message.group = message.group._id || message.group;
+  if (message.replyToStory) message.replyToStory = message.replyToStory.toString();
   if (message.replyTo && typeof message.replyTo === 'object') {
     message.replyTo = {
       ...message.replyTo,
@@ -127,6 +129,31 @@ async function assertReplyAllowed(req, replyToId, { to, groupId }) {
     }
   }
   return parent._id;
+}
+async function assertStoryReplyAllowed(replyToStoryId, userId) {
+  if (!replyToStoryId) return undefined;
+  const storyOid = toObjectId(replyToStoryId);
+  if (!storyOid) {
+    const err = new Error('Invalid replyToStory id');
+    err.status = 400;
+    throw err;
+  }
+  const story = await Story.findById(storyOid);
+  if (!story || story.expiresAt <= new Date()) {
+    const err = new Error('Story not found or expired');
+    err.status = 404;
+    throw err;
+  }
+  if (story.sealed) {
+    const envelopes = story.envelopes || [];
+    const allowed = envelopes.some((e) => String(e.user) === String(userId));
+    if (!allowed) {
+      const err = new Error('Not in this story\'s audience');
+      err.status = 403;
+      throw err;
+    }
+  }
+  return story._id;
 }
 
 function parseForwardPolicy(raw) {
@@ -243,12 +270,13 @@ export async function checkForwardAllowed(req, res) {
 
 export async function sendMessage(req, res) {
   try {
-    const {
+   const {
       to,
       forRecipient,
       forSender,
       attachmentId,
       replyTo,
+      replyToStory,
       forwardedFrom,
       kind,
       expiresInSeconds,
@@ -278,17 +306,19 @@ export async function sendMessage(req, res) {
       });
     }
 
-    const replyToId = await assertReplyAllowed(req, replyTo, { to });
-    const forwardMeta = await assertForwardAllowed(req, forwardedFrom);
+const replyToId = await assertReplyAllowed(req, replyTo, { to });
+   const replyToStoryId = await assertStoryReplyAllowed(replyToStory, req.user._id);
+    const forwardMeta = await assertForwardAllowed(req, forwardedFrom); 
     const forwardPolicy = parseForwardPolicy(forwardPolicyRaw);
 
-    const created = await Message.create({
+   const created = await Message.create({
       from: req.user._id,
       to,
       forRecipient: normalizeEnvelope(forRecipient),
       forSender: normalizeEnvelope(forSender),
       attachment: attachmentId || undefined,
       replyTo: replyToId,
+      replyToStory: replyToStoryId,
       kind: kind === 'ai_note' ? 'ai_note' : 'text',
       expiresAt: expiresAt || undefined,
       forwardedFrom: forwardMeta,
