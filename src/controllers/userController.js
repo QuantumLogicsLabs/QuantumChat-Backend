@@ -34,6 +34,22 @@ export async function listUsers(req, res) {
   res.json({ success: true, data: users.map((u) => u.toPublicJSON()) });
 }
 
+export async function getMe(req, res) {
+  res.json({ success: true, data: req.user.toSelfJSON() });
+}
+
+/** Lightweight key-sync check: current server-advertised X5 public keys for the session user. */
+export async function getMyPublicKeys(req, res) {
+  const publicKeys = (req.user.publicKeys || []).map((k) => String(k).toLowerCase());
+  res.json({
+    success: true,
+    data: {
+      publicKeys,
+      keyRotatedAt: req.user.keyRotatedAt || null,
+    },
+  });
+}
+
 export async function getUser(req, res) {
   const user = await User.findById(req.params.id).select(PUBLIC_FIELDS);
   if (!user) return res.status(404).json({ success: false, error: 'User not found' });

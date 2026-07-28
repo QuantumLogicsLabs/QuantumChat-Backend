@@ -12,6 +12,8 @@ import {
   getAvatar,
   exportAccountData,
   deleteAccount,
+  getMe,
+  getMyPublicKeys,
 } from '../controllers/userController.js';
 import {
   getPushVapidPublicKey,
@@ -30,6 +32,8 @@ const router = Router();
 router.use(apiLimiter);
 router.use(requireAuth);
 router.get('/', listUsers);
+router.get('/me', getMe);
+router.get('/me/public-keys', getMyPublicKeys);
 router.patch('/me', updateProfile);
 router.patch('/me/public-keys', updatePublicKeys);
 router.get('/me/blocked', listBlockedUsers);
