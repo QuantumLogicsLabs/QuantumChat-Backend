@@ -19,3 +19,13 @@ export const apiLimiter = rateLimit({
   legacyHeaders: false,
   message: { success: false, error: 'Too many requests, please try again shortly' },
 });
+
+/** Separate budget for short-lived encrypted call signaling polling. */
+export const callSignalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method === 'OPTIONS',
+  message: { success: false, error: 'Too many call signaling requests' },
+});

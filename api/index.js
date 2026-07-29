@@ -7,14 +7,16 @@ const STATIC_ALLOWED_ORIGINS = [
   'https://chat.quantumlogicslimited.com',
   'https://ai.quantumlogicslimited.com',
   'https://quantum-chat.vercel.app',
+  'https://quantum-chat-frontend.vercel.app',
+  'https://quantum-chat-frontend-mu.vercel.app',
   'https://quantum-ai-frontend.vercel.app',
 ];
 
 function isAllowedOrigin(origin) {
   if (!origin) return false;
   if (STATIC_ALLOWED_ORIGINS.includes(origin)) return true;
-  return String(process.env.CLIENT_URL || '')
-    .split(',')
+  return [process.env.CLIENT_URL, process.env.CORS_ORIGINS]
+    .flatMap((value) => String(value || '').split(','))
     .map((value) => value.trim())
     .filter(Boolean)
     .includes(origin);
