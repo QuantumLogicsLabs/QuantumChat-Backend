@@ -102,11 +102,18 @@ const userSchema = new mongoose.Schema(
       default: () => ({}),
     },
     blockedUsers: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-      },
-    ],
+  {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+  },
+],
+friends: [
+  {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+  },
+],
+    
     avatarPath: {
       type: String,
       default: null,
@@ -186,6 +193,7 @@ userSchema.methods.toSelfJSON = function toSelfJSON() {
     emailVerified: Boolean(this.emailVerified),
     lastLoginAt: this.lastLoginAt,
     blockedUsers: Array.isArray(this.blockedUsers) ? this.blockedUsers.map((id) => String(id)) : [],
+    friends: Array.isArray(this.friends) ? this.friends.map((id) => String(id)) : [],   // ← add this line
     totpEnabled: Boolean(this.totpEnabled),
   };
 };

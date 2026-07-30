@@ -9,11 +9,12 @@ import { authHeaders } from './attacks.js';
 
 export async function startTestServer(options = {}) {
   const mongod = await MongoMemoryServer.create();
+  process.env.NODE_ENV = 'test';
+  process.env.STORAGE_PROVIDER = 'memory';
   process.env.MONGODB_URI = mongod.getUri();
   process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-only-secret-never-used-in-production';
   process.env.QUANTUM_AI_SERVICE_SECRET =
     process.env.QUANTUM_AI_SERVICE_SECRET || 'test-only-quantum-ai-service-secret';
-  process.env.UPLOAD_DIR = process.env.UPLOAD_DIR || '.test-uploads';
   process.env.CLIENT_URL =
     process.env.CLIENT_URL || 'http://localhost:5173,http://localhost:5175';
 

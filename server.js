@@ -5,9 +5,11 @@ import { createApp } from "./src/app.js";
 import { connectDB } from "./src/config/db.js";
 import { attachSocket } from "./src/socket/index.js";
 import { runExpiryJobs } from "./src/jobs/expireMessages.js";
+import FriendRequest from "./src/models/FriendRequest.js";
 
 async function main() {
   await connectDB();
+  await FriendRequest.syncIndexes();
 
   const app = createApp();
   const server = http.createServer(app);
@@ -26,7 +28,6 @@ async function main() {
   setInterval(() => {
     runExpiryJobs(io).catch((err) => console.error("Expiry job failed:", err.message));
   }, EXPIRY_INTERVAL_MS);
-  // Kick once shortly after boot so expired rows clear without waiting a full minute.
   setTimeout(() => {
     runExpiryJobs(io).catch((err) => console.error("Expiry job failed:", err.message));
   }, 5_000);

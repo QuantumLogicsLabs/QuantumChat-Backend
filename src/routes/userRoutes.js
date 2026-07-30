@@ -12,6 +12,13 @@ import {
   getAvatar,
   exportAccountData,
   deleteAccount,
+discoverUsers,
+  listFriendRequests,
+  sendFriendRequest,
+  cancelFriendRequest,
+  acceptFriendRequest,
+  declineFriendRequest,
+  removeFriend,
   getMe,
   getMyPublicKeys,
 } from '../controllers/userController.js';
@@ -46,6 +53,7 @@ router.delete('/me/sessions/:sessionId', revokeSession);
 router.get('/me/vault', getVault);
 router.put('/me/vault', putVault);
 router.delete('/me/vault', deleteVault);
+router.get('/me', getMe);
 router.post('/me/ai-capsules', createAiCapsule);
 router.get('/me/ai-capsules', listAiCapsules);
 router.get('/me/push/vapid-public-key', getPushVapidPublicKey);
@@ -54,6 +62,13 @@ router.delete('/me/push/subscribe', unsubscribePush);
 router.post('/:id/block', blockUser);
 router.delete('/:id/block', unblockUser);
 router.get('/:id/avatar', getAvatar);
+router.get('/discover', discoverUsers);
+router.get('/friend-requests', listFriendRequests);
+router.post('/friend-requests', sendFriendRequest);
+router.delete('/friend-requests/:id', cancelFriendRequest);
+router.post('/friend-requests/:id/accept', acceptFriendRequest);
+router.post('/friend-requests/:id/decline', declineFriendRequest);
+router.delete('/friends/:id', removeFriend);
 router.get('/:id', getUser);
 
 export default router;

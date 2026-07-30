@@ -79,9 +79,13 @@ export const storyUpload = multer({
 
 /** Display / Drive object name helper (not a filesystem path). */
 export function newObjectName(prefix = '', ext = '') {
-  const safeExt = ext && SAFE_IMAGE_EXTS.has(ext.toLowerCase()) ? ext.toLowerCase() : ext || '';
+  const safePrefix = String(prefix || '')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 64);
+  const normalizedExt = String(ext || '').toLowerCase();
+  const safeExt = /^\.[a-z0-9]{1,10}$/.test(normalizedExt) ? normalizedExt : '';
   const base = `${crypto.randomUUID()}${safeExt}`;
-  return prefix ? `${prefix.replace(/\/?$/, '/')}${base}` : base;
+  return safePrefix ? `${safePrefix}/${base}` : base;
 }
 
 export { getStorage };

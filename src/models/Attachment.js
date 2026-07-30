@@ -14,7 +14,7 @@ const attachmentSchema = new mongoose.Schema(
     storagePath: { type: String, required: true },
     storageProvider: {
       type: String,
-      enum: ['local', 'google-drive'],
+      enum: ['local', 'google-drive', 'memory'],
       default: 'google-drive',
     },
     // DM sealed-box fields (optional for group secretbox attachments)

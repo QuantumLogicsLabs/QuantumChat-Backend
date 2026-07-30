@@ -1,6 +1,7 @@
 import { GoogleDriveStorageAdapter } from './GoogleDriveStorageAdapter.js';
+import { MemoryStorageAdapter } from './MemoryStorageAdapter.js';
 
-/** @type {import('./GoogleDriveStorageAdapter.js').GoogleDriveStorageAdapter | null} */
+/** @type {GoogleDriveStorageAdapter | MemoryStorageAdapter | null} */
 let cached;
 
 /**
@@ -16,6 +17,13 @@ function normalizeDriveFolderId(raw) {
 
 export function getStorage() {
   if (cached) return cached;
+  if (process.env.STORAGE_PROVIDER === 'memory') {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('Memory storage is restricted to NODE_ENV=test');
+    }
+    cached = new MemoryStorageAdapter();
+    return cached;
+  }
   const folderId = normalizeDriveFolderId(process.env.GOOGLE_DRIVE_FOLDER_ID);
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const key = process.env.GOOGLE_PRIVATE_KEY;
@@ -29,7 +37,8 @@ export function getStorage() {
 }
 
 export function getStorageProviderName() {
-  return 'google-drive';
+  return process.env.STORAGE_PROVIDER === 'memory' ? 'memory' : 'google-drive';
 }
 
 export { GoogleDriveStorageAdapter } from './GoogleDriveStorageAdapter.js';
+export { MemoryStorageAdapter } from './MemoryStorageAdapter.js';

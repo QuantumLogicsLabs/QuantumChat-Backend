@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 
 const STORY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_DURATION_MS = 60 * 1000;
+const MIN_TTL_MS = 15 * 60 * 1000;        // 15 minutes minimum
+const MAX_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days maximum
 const HEX_64 = /^[0-9a-f]{64}$/i;
 
 const storyEnvelopeSchema = new mongoose.Schema(
@@ -25,7 +27,7 @@ const storySchema = new mongoose.Schema(
     storagePath: { type: String, required: true },
     storageProvider: {
       type: String,
-      enum: ['local', 'google-drive'],
+      enum: ['local', 'google-drive', 'memory'],
       default: 'google-drive',
     },
     durationMs: { type: Number, default: 0, max: MAX_DURATION_MS },
@@ -44,6 +46,8 @@ const storySchema = new mongoose.Schema(
 
 storySchema.statics.ttlMs = STORY_TTL_MS;
 storySchema.statics.maxDurationMs = MAX_DURATION_MS;
+storySchema.statics.minTtlMs = MIN_TTL_MS;
+storySchema.statics.maxTtlMs = MAX_TTL_MS;
 
 storySchema.methods.toPublicJSON = function toPublicJSON() {
   return {
