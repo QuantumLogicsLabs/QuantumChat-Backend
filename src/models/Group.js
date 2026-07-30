@@ -34,6 +34,11 @@ const groupSchema = new mongoose.Schema(
       },
     ],
     photoPath: { type: String },
+    photoStorageProvider: {
+      type: String,
+      enum: ['local', 'google-drive'],
+      default: null,
+    },
     photoMimeType: { type: String },
     inviteCode: {
       type: String,

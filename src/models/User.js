@@ -111,6 +111,11 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    avatarStorageProvider: {
+      type: String,
+      enum: ['local', 'google-drive'],
+      default: null,
+    },
     avatarMimeType: {
       type: String,
       default: null,

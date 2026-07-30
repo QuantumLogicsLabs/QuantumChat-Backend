@@ -1,25 +1,39 @@
-import fs from 'fs';
 import mongoose from 'mongoose';
 import Attachment from '../models/Attachment.js';
 import Group from '../models/Group.js';
-import { resolveUploadPath } from '../middleware/upload.js';
+import { getStorage, newObjectName } from '../middleware/upload.js';
 import { areUsersBlocked } from './userController.js';
 
 const HEX_64 = /^[0-9a-f]{64}$/i;
 
-function cleanupFiles(files = []) {
-  for (const file of files) {
-    if (file?.path) fs.unlink(file.path, () => {});
+async function putBuffer(file, objectName, userId) {
+  const storage = getStorage();
+  const stored = await storage.put(
+    file.buffer,
+    objectName,
+    file.mimetype || 'application/octet-stream',
+    String(userId)
+  );
+  return stored;
+}
+
+async function deleteKey(key) {
+  if (!key) return;
+  try {
+    await getStorage().delete(key);
+  } catch {
+    // best-effort
   }
 }
 
 export async function uploadAttachment(req, res) {
   const recipientFile = req.files?.file?.[0] || req.file;
   const senderFile = req.files?.senderFile?.[0];
+  /** @type {string[]} */
+  const uploadedKeys = [];
 
   try {
-    if (!recipientFile) {
-      cleanupFiles([senderFile]);
+    if (!recipientFile?.buffer) {
       return res.status(400).json({ success: false, error: 'file is required' });
     }
 
@@ -37,18 +51,18 @@ export async function uploadAttachment(req, res) {
 
     if (groupId) {
       if (!mongoose.isValidObjectId(groupId)) {
-        cleanupFiles([recipientFile, senderFile]);
         return res.status(400).json({ success: false, error: 'Valid groupId is required' });
       }
       if (!secretboxNonce || typeof secretboxNonce !== 'string') {
-        cleanupFiles([recipientFile, senderFile]);
         return res.status(400).json({ success: false, error: 'secretboxNonce is required for group files' });
       }
       const group = await Group.findById(groupId);
       if (!group || !group.isMember(req.user._id)) {
-        cleanupFiles([recipientFile, senderFile]);
         return res.status(403).json({ success: false, error: 'Not a group member' });
       }
+
+      const recipientStored = await putBuffer(recipientFile, newObjectName('', '.enc'), req.user._id);
+      uploadedKeys.push(recipientStored.key);
 
       const attachment = await Attachment.create({
         owner: req.user._id,
@@ -56,7 +70,8 @@ export async function uploadAttachment(req, res) {
         filename: recipientFile.originalname,
         mimetype: recipientFile.mimetype || 'application/octet-stream',
         size: recipientFile.size,
-        storagePath: recipientFile.filename,
+        storagePath: recipientStored.key,
+        storageProvider: recipientStored.provider,
         encryption: 'secretbox',
         secretboxNonce,
       });
@@ -76,25 +91,22 @@ export async function uploadAttachment(req, res) {
     }
 
     if (!recipientId || !mongoose.isValidObjectId(recipientId)) {
-      cleanupFiles([recipientFile, senderFile]);
       return res.status(400).json({ success: false, error: 'Valid recipientId is required' });
     }
     if (!nonce || !HEX_64.test(ephemeralPublicKey || '') || !HEX_64.test(targetPublicKey || '')) {
-      cleanupFiles([recipientFile, senderFile]);
       return res.status(400).json({
         success: false,
         error: 'nonce, ephemeralPublicKey and targetPublicKey are required',
       });
     }
 
-    const hasSenderCopy = Boolean(senderFile);
+    const hasSenderCopy = Boolean(senderFile?.buffer);
     if (hasSenderCopy) {
       if (
         !forSenderNonce ||
         !HEX_64.test(forSenderEphemeralPublicKey || '') ||
         !HEX_64.test(forSenderTargetPublicKey || '')
       ) {
-        cleanupFiles([recipientFile, senderFile]);
         return res.status(400).json({
           success: false,
           error: 'forSenderNonce, forSenderEphemeralPublicKey and forSenderTargetPublicKey are required with senderFile',
@@ -103,8 +115,16 @@ export async function uploadAttachment(req, res) {
     }
 
     if (await areUsersBlocked(req.user._id, recipientId)) {
-      cleanupFiles([recipientFile, senderFile]);
       return res.status(403).json({ success: false, error: 'Cannot send attachments to a blocked user' });
+    }
+
+    const recipientStored = await putBuffer(recipientFile, newObjectName('', '.enc'), req.user._id);
+    uploadedKeys.push(recipientStored.key);
+
+    let senderStored;
+    if (hasSenderCopy) {
+      senderStored = await putBuffer(senderFile, newObjectName('', '.enc'), req.user._id);
+      uploadedKeys.push(senderStored.key);
     }
 
     const attachment = await Attachment.create({
@@ -113,14 +133,15 @@ export async function uploadAttachment(req, res) {
       filename: recipientFile.originalname,
       mimetype: recipientFile.mimetype || 'application/octet-stream',
       size: recipientFile.size,
-      storagePath: recipientFile.filename,
+      storagePath: recipientStored.key,
+      storageProvider: recipientStored.provider,
       nonce,
       ephemeralPublicKey: ephemeralPublicKey.toLowerCase(),
       targetPublicKey: targetPublicKey.toLowerCase(),
       encryption: 'sealed',
       ...(hasSenderCopy
         ? {
-            forSenderStoragePath: senderFile.filename,
+            forSenderStoragePath: senderStored.key,
             forSenderNonce,
             forSenderEphemeralPublicKey: forSenderEphemeralPublicKey.toLowerCase(),
             forSenderTargetPublicKey: forSenderTargetPublicKey.toLowerCase(),
@@ -138,45 +159,45 @@ export async function uploadAttachment(req, res) {
       },
     });
   } catch (err) {
-    cleanupFiles([recipientFile, senderFile]);
+    await Promise.all(uploadedKeys.map((key) => deleteKey(key)));
     res.status(500).json({ success: false, error: err.message });
   }
 }
 
 export async function downloadAttachment(req, res) {
-  const attachment = await Attachment.findById(req.params.id);
-  if (!attachment) {
-    return res.status(404).json({ success: false, error: 'Attachment not found' });
-  }
+  try {
+    const attachment = await Attachment.findById(req.params.id);
+    if (!attachment) {
+      return res.status(404).json({ success: false, error: 'Attachment not found' });
+    }
 
-  const userId = req.user._id.toString();
-  const isOwner = attachment.owner.toString() === userId;
+    const userId = req.user._id.toString();
+    const isOwner = attachment.owner.toString() === userId;
 
-  if (attachment.group) {
-    const group = await Group.findById(attachment.group);
-    if (!group || !group.isMember(req.user._id)) {
+    if (attachment.group) {
+      const group = await Group.findById(attachment.group);
+      if (!group || !group.isMember(req.user._id)) {
+        return res.status(403).json({ success: false, error: 'Not authorized to access this attachment' });
+      }
+      const bytes = await getStorage().read(attachment.storagePath);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      return res.send(bytes);
+    }
+
+    const isRecipient = attachment.recipient?.toString() === userId;
+    if (!isOwner && !isRecipient) {
       return res.status(403).json({ success: false, error: 'Not authorized to access this attachment' });
     }
+
+    const storagePath =
+      isOwner && attachment.forSenderStoragePath ? attachment.forSenderStoragePath : attachment.storagePath;
+
+    const bytes = await getStorage().read(storagePath);
     res.setHeader('Content-Type', 'application/octet-stream');
-    return res.sendFile(resolveUploadPath(attachment.storagePath), (err) => {
-      if (err && !res.headersSent) {
-        res.status(404).json({ success: false, error: 'Encrypted file not found on disk' });
-      }
-    });
-  }
-
-  const isRecipient = attachment.recipient?.toString() === userId;
-  if (!isOwner && !isRecipient) {
-    return res.status(403).json({ success: false, error: 'Not authorized to access this attachment' });
-  }
-
-  const storagePath =
-    isOwner && attachment.forSenderStoragePath ? attachment.forSenderStoragePath : attachment.storagePath;
-
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.sendFile(resolveUploadPath(storagePath), (err) => {
-    if (err && !res.headersSent) {
-      res.status(404).json({ success: false, error: 'Encrypted file not found on disk' });
+    return res.send(bytes);
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(404).json({ success: false, error: 'Encrypted file not found' });
     }
-  });
+  }
 }

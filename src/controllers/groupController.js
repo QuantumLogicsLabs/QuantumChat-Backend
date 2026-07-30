@@ -1,11 +1,10 @@
 import crypto from 'crypto';
-import fs from 'fs';
 import mongoose from 'mongoose';
 import Group from '../models/Group.js';
 import GroupJoinRequest from '../models/GroupJoinRequest.js';
 import User from '../models/User.js';
 import Message from '../models/Message.js';
-import { resolveUploadPath, safeImageContentType } from '../middleware/upload.js';
+import { getStorage, newObjectName, safeImageContentType } from '../middleware/upload.js';
 import { sealForPublicKey } from '../utils/sealedBox.js';
 import { isUserOnline } from '../socket/index.js';
 import { notifyUser } from '../services/pushService.js';
@@ -558,24 +557,36 @@ export async function uploadGroupPhoto(req, res) {
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ success: false, error: 'Invalid group id' });
     }
-    if (!req.file) return res.status(400).json({ success: false, error: 'Photo required' });
+    if (!req.file?.buffer) return res.status(400).json({ success: false, error: 'Photo required' });
     const group = await Group.findById(id);
     if (!group) {
-      fs.unlink(req.file.path, () => {});
       return res.status(404).json({ success: false, error: 'Group not found' });
     }
     if (!group.isAdmin(req.user._id)) {
-      fs.unlink(req.file.path, () => {});
       return res.status(403).json({ success: false, error: 'Only admins can change the group photo' });
     }
+    const storage = getStorage();
+    const ext = (() => {
+      const raw = String(req.file.originalname || '');
+      const i = raw.lastIndexOf('.');
+      return i >= 0 ? raw.slice(i).toLowerCase() : '.jpg';
+    })();
+    const objectName = newObjectName('groups', ext === '.jpeg' ? '.jpg' : ext);
+    const stored = await storage.put(
+      req.file.buffer,
+      objectName,
+      safeImageContentType(req.file.mimetype),
+      String(req.user._id)
+    );
     if (group.photoPath) {
       try {
-        fs.unlink(resolveUploadPath(group.photoPath), () => {});
+        await storage.delete(group.photoPath);
       } catch {
         /* ignore */
       }
     }
-    group.photoPath = `groups/${req.file.filename}`;
+    group.photoPath = stored.key;
+    group.photoStorageProvider = stored.provider;
     group.photoMimeType = safeImageContentType(req.file.mimetype);
     await group.save();
     const populated = await loadGroup(group._id);
@@ -583,7 +594,6 @@ export async function uploadGroupPhoto(req, res) {
     emitToMembers(req.app.get('io'), group.members, 'group:updated', payload);
     res.json({ success: true, data: payload });
   } catch (err) {
-    if (req.file?.path) fs.unlink(req.file.path, () => {});
     res.status(500).json({ success: false, error: err.message });
   }
 }
@@ -598,14 +608,15 @@ export async function getGroupPhoto(req, res) {
     if (!group.isMember(req.user._id)) {
       return res.status(403).json({ success: false, error: 'Not a group member' });
     }
+    const bytes = await getStorage().read(group.photoPath);
     res.setHeader('Content-Type', safeImageContentType(group.photoMimeType));
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', 'inline');
-    res.sendFile(resolveUploadPath(group.photoPath), (err) => {
-      if (err && !res.headersSent) res.status(404).json({ success: false, error: 'Photo not found' });
-    });
+    res.send(bytes);
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    if (!res.headersSent) {
+      res.status(404).json({ success: false, error: 'Photo not found' });
+    }
   }
 }
 
@@ -701,7 +712,7 @@ export async function removeMember(req, res) {
     if (group.members.length === 0) {
       if (group.photoPath) {
         try {
-          fs.unlink(resolveUploadPath(group.photoPath), () => {});
+          await getStorage().delete(group.photoPath);
         } catch {
           /* ignore */
         }
@@ -857,7 +868,7 @@ export async function deleteGroup(req, res) {
     const members = group.members.map(String);
     if (group.photoPath) {
       try {
-        fs.unlink(resolveUploadPath(group.photoPath), () => {});
+        await getStorage().delete(group.photoPath);
       } catch {
         /* ignore */
       }

@@ -3,8 +3,7 @@ import Group from '../models/Group.js';
 import Message from '../models/Message.js';
 import Attachment from '../models/Attachment.js';
 import mongoose from 'mongoose';
-import fs from 'fs';
-import { resolveUploadPath, safeImageContentType } from '../middleware/upload.js';
+import { getStorage, newObjectName, safeImageContentType } from '../middleware/upload.js';
 import { toObjectId } from '../utils/toObjectId.js';
 
 const HEX_64 = /^[0-9a-f]{64}$/i;
@@ -176,25 +175,38 @@ export async function updatePublicKeys(req, res) {
 
 export async function uploadAvatar(req, res) {
   try {
-    if (!req.file) {
+    if (!req.file?.buffer) {
       return res.status(400).json({ success: false, error: 'Image file is required' });
     }
 
-    const relativePath = `avatars/${req.file.filename}`;
+    const storage = getStorage();
+    const ext = (() => {
+      const raw = String(req.file.originalname || '');
+      const i = raw.lastIndexOf('.');
+      return i >= 0 ? raw.slice(i).toLowerCase() : '.jpg';
+    })();
+    const objectName = newObjectName('avatars', ext === '.jpeg' ? '.jpg' : ext);
+    const stored = await storage.put(
+      req.file.buffer,
+      objectName,
+      safeImageContentType(req.file.mimetype),
+      String(req.user._id)
+    );
+
     if (req.user.avatarPath) {
       try {
-        fs.unlink(resolveUploadPath(req.user.avatarPath), () => {});
+        await storage.delete(req.user.avatarPath);
       } catch {
         // ignore
       }
     }
 
-    req.user.avatarPath = relativePath;
+    req.user.avatarPath = stored.key;
+    req.user.avatarStorageProvider = stored.provider;
     req.user.avatarMimeType = safeImageContentType(req.file.mimetype);
     await req.user.save();
     res.json({ success: true, data: req.user.toSelfJSON() });
   } catch (err) {
-    if (req.file?.path) fs.unlink(req.file.path, () => {});
     res.status(500).json({ success: false, error: err.message });
   }
 }
@@ -203,12 +215,13 @@ export async function deleteAvatar(req, res) {
   try {
     if (req.user.avatarPath) {
       try {
-        fs.unlink(resolveUploadPath(req.user.avatarPath), () => {});
+        await getStorage().delete(req.user.avatarPath);
       } catch {
         // ignore
       }
     }
     req.user.avatarPath = null;
+    req.user.avatarStorageProvider = null;
     req.user.avatarMimeType = null;
     await req.user.save();
     res.json({ success: true, data: req.user.toSelfJSON() });
@@ -227,17 +240,16 @@ export async function getAvatar(req, res) {
     if (!user?.avatarPath) {
       return res.status(404).json({ success: false, error: 'No avatar' });
     }
-    const filePath = resolveUploadPath(user.avatarPath);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, error: 'Avatar file missing' });
-    }
+    const bytes = await getStorage().read(user.avatarPath);
     res.setHeader('Content-Type', safeImageContentType(user.avatarMimeType));
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Disposition', 'inline');
     res.setHeader('Cache-Control', 'private, max-age=3600');
-    fs.createReadStream(filePath).pipe(res);
+    res.send(bytes);
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    if (!res.headersSent) {
+      res.status(404).json({ success: false, error: 'Avatar file missing' });
+    }
   }
 }
 
@@ -311,7 +323,7 @@ export async function deleteAccount(req, res) {
 
     if (user.avatarPath) {
       try {
-        fs.unlink(resolveUploadPath(user.avatarPath), () => {});
+        await getStorage().delete(user.avatarPath);
       } catch {
         // ignore
       }

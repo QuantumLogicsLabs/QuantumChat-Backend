@@ -1,16 +1,15 @@
 // Deletes all documents from the QuantumChat collections (users, messages,
 // attachments) — for clearing out test data. Does NOT drop the database or
 // collections themselves, so indexes stay intact.
+// Blob files live in Google Drive (not a local uploads/ folder); this script
+// only clears MongoDB. Remove Drive objects from the Shared Drive folder if needed.
 //
 // Usage:
 //   node scripts/clean-db.js           # dry run — shows counts, deletes nothing
 //   node scripts/clean-db.js --yes     # actually deletes
 import 'dotenv/config';
-import fs from 'fs';
-import path from 'path';
 import mongoose from 'mongoose';
 import { connectDB } from '../src/config/db.js';
-import { UPLOAD_DIR } from '../src/middleware/upload.js';
 import User from '../src/models/User.js';
 import Message from '../src/models/Message.js';
 import Attachment from '../src/models/Attachment.js';
@@ -43,15 +42,7 @@ async function main() {
   console.log(`  users:       deleted ${results[0].deletedCount}`);
   console.log(`  messages:    deleted ${results[1].deletedCount}`);
   console.log(`  attachments: deleted ${results[2].deletedCount}`);
-
-  let filesDeleted = 0;
-  if (fs.existsSync(UPLOAD_DIR)) {
-    for (const name of fs.readdirSync(UPLOAD_DIR)) {
-      fs.unlinkSync(path.join(UPLOAD_DIR, name));
-      filesDeleted += 1;
-    }
-  }
-  console.log(`  upload files: deleted ${filesDeleted} from ${UPLOAD_DIR}`);
+  console.log('  (Google Drive blobs are not deleted by this script)');
 
   console.log('\nDone. Collections still exist (with their indexes) — just empty.');
 

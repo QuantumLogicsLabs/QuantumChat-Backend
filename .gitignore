@@ -8,3 +8,5 @@ node_modules/
 gitleaks.exe
 gitleaks_*.zip
 
+quantum-chat.json
+/quantum-chat.json

@@ -1,7 +1,7 @@
-import fs from 'fs';
 import mongoose from 'mongoose';
+import path from 'path';
 import Story from '../models/Story.js';
-import { resolveUploadPath, isSafeImageMime, safeImageContentType } from '../middleware/upload.js';
+import { getStorage, newObjectName, isSafeImageMime, safeImageContentType } from '../middleware/upload.js';
 import { areUsersBlocked } from './userController.js';
 
 const HEX_64 = /^[0-9a-f]{64}$/i;
@@ -28,11 +28,12 @@ function parseEnvelopes(raw) {
       return null;
     }
   }
-  if (!Array.isArray(list) || list.length < 1) return null;
-  const envelopes = [];
+  if (!Array.isArray(list) || !list.length) return null;
+  const out = [];
   for (const item of list) {
-    if (!item || !mongoose.isValidObjectId(item.user)) return null;
     if (
+      !item ||
+      !mongoose.isValidObjectId(item.user) ||
       typeof item.ciphertext !== 'string' ||
       typeof item.nonce !== 'string' ||
       !HEX_64.test(item.ephemeralPublicKey || '') ||
@@ -40,7 +41,7 @@ function parseEnvelopes(raw) {
     ) {
       return null;
     }
-    envelopes.push({
+    out.push({
       user: item.user,
       ciphertext: item.ciphertext,
       nonce: item.nonce,
@@ -48,12 +49,12 @@ function parseEnvelopes(raw) {
       targetPublicKey: String(item.targetPublicKey).toLowerCase(),
     });
   }
-  return envelopes;
+  return out;
 }
 
 export async function createStory(req, res) {
   try {
-    if (!req.file) {
+    if (!req.file?.buffer) {
       return res.status(400).json({ success: false, error: 'Media file is required' });
     }
 
@@ -67,14 +68,12 @@ export async function createStory(req, res) {
         : null);
 
     if (!mediaType) {
-      fs.unlink(req.file.path, () => {});
       return res.status(400).json({ success: false, error: 'Unsupported media type' });
     }
 
     let durationMs = Number(req.body.durationMs || 0);
     if (!Number.isFinite(durationMs) || durationMs < 0) durationMs = 0;
     if ((mediaType === 'video' || mediaType === 'audio') && durationMs > Story.maxDurationMs) {
-      fs.unlink(req.file.path, () => {});
       return res.status(400).json({
         success: false,
         error: `Stories must be ${Story.maxDurationMs / 1000} seconds or shorter`,
@@ -94,7 +93,6 @@ export async function createStory(req, res) {
     if (sealed) {
       envelopes = parseEnvelopes(req.body.envelopes);
       if (!envelopes) {
-        fs.unlink(req.file.path, () => {});
         return res.status(400).json({
           success: false,
           error: 'Sealed stories require per-viewer X5 envelopes',
@@ -102,7 +100,6 @@ export async function createStory(req, res) {
       }
       const selfIncluded = envelopes.some((e) => String(e.user) === String(req.user._id));
       if (!selfIncluded) {
-        fs.unlink(req.file.path, () => {});
         return res.status(400).json({
           success: false,
           error: 'Sealed stories must include an envelope for the author',
@@ -110,19 +107,28 @@ export async function createStory(req, res) {
       }
       contentIv = typeof req.body.contentIv === 'string' ? req.body.contentIv.slice(0, 128) : '';
       if (!contentIv) {
-        fs.unlink(req.file.path, () => {});
         return res.status(400).json({ success: false, error: 'contentIv is required for sealed stories' });
       }
     }
 
-    const relativePath = `stories/${req.file.filename}`;
+    const ext = path.extname(req.file.originalname || '').toLowerCase();
+    const safeExt = ext === '.svg' ? '' : ext;
+    const objectName = newObjectName('stories', safeExt);
+    const stored = await getStorage().put(
+      req.file.buffer,
+      objectName,
+      mimetype || req.file.mimetype || 'application/octet-stream',
+      String(req.user._id)
+    );
+
     const story = await Story.create({
       user: req.user._id,
       mediaType,
-      filename: req.file.originalname || req.file.filename,
+      filename: req.file.originalname || objectName,
       mimetype: mimetype || req.file.mimetype,
       size: req.file.size,
-      storagePath: relativePath,
+      storagePath: stored.key,
+      storageProvider: stored.provider,
       durationMs,
       caption,
       expiresAt: new Date(Date.now() + Story.ttlMs),
@@ -145,7 +151,6 @@ export async function createStory(req, res) {
 
     res.status(201).json({ success: true, data: payload });
   } catch (err) {
-    if (req.file?.path) fs.unlink(req.file.path, () => {});
     res.status(500).json({ success: false, error: err.message });
   }
 }
@@ -164,8 +169,6 @@ export async function listStories(req, res) {
       const ownerId = String(story.user?._id || story.user);
       if (blocked.has(ownerId)) continue;
       if (await areUsersBlocked(req.user._id, ownerId)) continue;
-      // Sealed stories are only listed for viewers who have an envelope
-      // (otherwise the client can only show “no envelope for your keys”).
       if (story.sealed) {
         const envelopes = story.envelopes || [];
         const allowed = envelopes.some((e) => String(e.user) === viewerId);
@@ -213,10 +216,7 @@ export async function getStoryMedia(req, res) {
       }
     }
 
-    const filePath = resolveUploadPath(story.storagePath);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ success: false, error: 'Media missing' });
-    }
+    const bytes = await getStorage().read(story.storagePath);
     if (story.sealed) {
       res.setHeader('Content-Type', 'application/octet-stream');
       res.setHeader('Content-Disposition', 'attachment');
@@ -236,9 +236,11 @@ export async function getStoryMedia(req, res) {
     }
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, max-age=300');
-    fs.createReadStream(filePath).pipe(res);
+    res.send(bytes);
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    if (!res.headersSent) {
+      res.status(404).json({ success: false, error: 'Media missing' });
+    }
   }
 }
 
@@ -254,7 +256,7 @@ export async function deleteStory(req, res) {
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
     try {
-      fs.unlink(resolveUploadPath(story.storagePath), () => {});
+      await getStorage().delete(story.storagePath);
     } catch {
       // ignore
     }

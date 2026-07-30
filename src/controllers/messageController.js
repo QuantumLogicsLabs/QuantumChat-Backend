@@ -1,10 +1,9 @@
-import fs from 'fs';
 import crypto from 'crypto';
 import mongoose from 'mongoose';
 import Message from '../models/Message.js';
 import Attachment from '../models/Attachment.js';
 import { areUsersBlocked } from './userController.js';
-import { resolveUploadPath } from '../middleware/upload.js';
+import { getStorage } from '../middleware/upload.js';
 import User from '../models/User.js';
 import Group from '../models/Group.js';
 import { sealForPublicKey } from '../utils/sealedBox.js';
@@ -87,10 +86,11 @@ async function removeAttachmentFiles(attachmentId) {
   if (!attachmentId) return;
   const attachment = await Attachment.findById(attachmentId);
   if (!attachment) return;
+  const storage = getStorage();
   try {
-    fs.unlink(resolveUploadPath(attachment.storagePath), () => {});
+    await storage.delete(attachment.storagePath);
     if (attachment.forSenderStoragePath) {
-      fs.unlink(resolveUploadPath(attachment.forSenderStoragePath), () => {});
+      await storage.delete(attachment.forSenderStoragePath);
     }
   } catch {
     // best-effort
@@ -470,6 +470,74 @@ export async function getConversation(req, res) {
       meta: {
         hasMore,
         nextBefore: page.length ? page[0].createdAt : null,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+// Realtime sync polling. The Vercel serverless deployment cannot hold a
+// WebSocket, so clients poll this instead of receiving socket 'message:new'.
+// It returns the identical toClientMessage() payload the socket emits — sealed
+// X5 envelopes only, no plaintext, no key material.
+const SYNC_FLOOR_MS = 24 * 60 * 60 * 1000; // cap lookback; never scan full history
+const SYNC_LIMIT = 200;
+const SYNC_OVERLAP_MS = 5000; // re-send window; the client dedupes by message id
+
+/**
+ * Returns every message across all of the caller's DMs and groups created after
+ * `since`. Deliberately a pure read — no read receipts are written here, because
+ * this spans conversations the user may not even have open.
+ */
+export async function syncMessages(req, res) {
+  try {
+    const requested = req.query.since ? new Date(req.query.since) : null;
+    const now = Date.now();
+    const floor = now - SYNC_FLOOR_MS;
+    // Clamp into [now - 24h, now]. The lower bound stops full-history scans; the
+    // upper bound matters because the cursor round-trips through the client — a
+    // device with a fast clock would otherwise ask for a future timestamp and
+    // silently skip every message written in the meantime.
+    const since =
+      requested && !Number.isNaN(requested.getTime())
+        ? new Date(Math.min(Math.max(requested.getTime(), floor), now))
+        : new Date(floor);
+
+    const groupIds = await Group.find({ members: req.user._id }).distinct('_id');
+    const filter = {
+      $and: [
+        {
+          $or: [
+            { to: req.user._id },
+            { from: req.user._id },
+            { group: { $in: groupIds } },
+          ],
+        },
+        { createdAt: { $gt: since } },
+        notExpiredFilter(),
+      ],
+    };
+
+    const rows = await Message.find(filter)
+      .sort({ createdAt: 1 })
+      .limit(SYNC_LIMIT + 1)
+      .populate('attachment', ATTACHMENT_POPULATE)
+      .populate('replyTo', 'from forRecipient forSender envelopes group content createdAt');
+
+    const hasMore = rows.length > SYNC_LIMIT;
+    const page = hasMore ? rows.slice(0, SYNC_LIMIT) : rows;
+
+    res.json({
+      success: true,
+      data: page.map(toClientMessage),
+      meta: {
+        hasMore,
+        // Server-issued cursor, rolled back by an overlap window. Client clocks
+        // are not trusted, and the last row's createdAt would be lossy: a write
+        // landing in the same millisecond but committing after this query would
+        // never be seen again. Overlap + client-side dedupe is lossless.
+        cursor: new Date(Date.now() - SYNC_OVERLAP_MS).toISOString(),
       },
     });
   } catch (err) {

@@ -1,5 +1,0 @@
-# Known false positives (historical / documentation placeholders).
-# Format: commit:path:rule:line — from gitleaks fingerprint output.
-
-# Deleted admin embed docs: commented JWT placeholder `eyJhbGciOiJIUzI1NiIs...` (not a live secret)
-2ba0a1ebd6029f7ddf0d6085043ba590bf1977a3:admin/src/pages/WebsitesPage.tsx:generic-api-key:50

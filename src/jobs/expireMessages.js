@@ -1,18 +1,18 @@
-import fs from 'fs';
 import Message from '../models/Message.js';
 import Story from '../models/Story.js';
 import Group from '../models/Group.js';
 import Attachment from '../models/Attachment.js';
-import { resolveUploadPath } from '../middleware/upload.js';
+import { getStorage } from '../middleware/upload.js';
 
 async function removeAttachmentFiles(attachmentId) {
   if (!attachmentId) return;
   const attachment = await Attachment.findById(attachmentId);
   if (!attachment) return;
+  const storage = getStorage();
   try {
-    fs.unlink(resolveUploadPath(attachment.storagePath), () => {});
+    await storage.delete(attachment.storagePath);
     if (attachment.forSenderStoragePath) {
-      fs.unlink(resolveUploadPath(attachment.forSenderStoragePath), () => {});
+      await storage.delete(attachment.forSenderStoragePath);
     }
   } catch {
     // best-effort
@@ -72,10 +72,11 @@ export async function purgeExpiredStories(io) {
   const expired = await Story.find({ expiresAt: { $lte: now } }).limit(100);
   if (!expired.length) return 0;
 
+  const storage = getStorage();
   for (const story of expired) {
     const id = story._id.toString();
     try {
-      fs.unlink(resolveUploadPath(story.storagePath), () => {});
+      await storage.delete(story.storagePath);
     } catch {
       // best-effort
     }

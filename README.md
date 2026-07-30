@@ -60,9 +60,13 @@ security-canary/             # intentional failing canary (not part of npm test)
 | `MONGODB_URI`        | —                             | **Required.** Mongo connection string            |
 | `JWT_SECRET`         | —                             | **Required.** JWT signing secret                 |
 | `JWT_EXPIRES_IN`     | 7d                            | Token lifetime                                   |
-| `UPLOAD_DIR`         | `uploads`                     | Encrypted attachment storage                     |
+| `GOOGLE_DRIVE_FOLDER_ID` | —                          | **Required.** Shared Drive folder id             |
+| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | —                    | **Required.** Drive service account email        |
+| `GOOGLE_PRIVATE_KEY` | —                             | **Required.** Service account private key PEM    |
 | `CLIENT_URL`         | `http://localhost:5173`       | Comma-separated CORS allowlist                   |
 | `SECURITY_FUZZ_KEYS` | `128` (PR) / `1000` (nightly) | Random-key samples in crypto fuzz tests          |
+
+Blob storage is **Google Drive only** (no local `uploads/` directory). Share the folder only with the service account.
 
 ## Testing — Security and Vulnerability Detection System
 

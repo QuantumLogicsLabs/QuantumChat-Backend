@@ -1,13 +1,7 @@
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
-import fs from 'fs';
-
-const UPLOAD_DIR = process.env.UPLOAD_DIR || (process.env.VERCEL ? '/tmp/uploads' : 'uploads');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-fs.mkdirSync(path.join(UPLOAD_DIR, 'avatars'), { recursive: true });
-fs.mkdirSync(path.join(UPLOAD_DIR, 'stories'), { recursive: true });
-fs.mkdirSync(path.join(UPLOAD_DIR, 'groups'), { recursive: true });
+import { getStorage } from '../storage/index.js';
 
 /** Raster images only — SVG is rejected (scriptable when opened as a document). */
 export const SAFE_IMAGE_MIMES = new Set([
@@ -42,56 +36,28 @@ function rasterImageFilter(label) {
   };
 }
 
-const encStorage = multer.diskStorage({
-  destination: UPLOAD_DIR,
-  filename: (req, file, cb) => cb(null, `${crypto.randomUUID()}.enc`),
-});
+// Memory staging only — durable blobs go to Google Drive via getStorage().
+const memory = multer.memoryStorage();
 
 export const upload = multer({
-  storage: encStorage,
+  storage: memory,
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-const avatarStorage = multer.diskStorage({
-  destination: path.join(UPLOAD_DIR, 'avatars'),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase();
-    const safeExt = SAFE_IMAGE_EXTS.has(ext) ? ext : '.jpg';
-    cb(null, `${crypto.randomUUID()}${safeExt}`);
-  },
-});
-
 export const avatarUpload = multer({
-  storage: avatarStorage,
+  storage: memory,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: rasterImageFilter('Avatar'),
 });
 
-const groupPhotoStorage = multer.diskStorage({
-  destination: path.join(UPLOAD_DIR, 'groups'),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase();
-    const safeExt = SAFE_IMAGE_EXTS.has(ext) ? ext : '.jpg';
-    cb(null, `${crypto.randomUUID()}${safeExt}`);
-  },
-});
-
 export const groupPhotoUpload = multer({
-  storage: groupPhotoStorage,
+  storage: memory,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: rasterImageFilter('Group photo'),
 });
 
-const storyStorage = multer.diskStorage({
-  destination: path.join(UPLOAD_DIR, 'stories'),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase() || '';
-    cb(null, `${crypto.randomUUID()}${ext === '.svg' ? '' : ext}`);
-  },
-});
-
 export const storyUpload = multer({
-  storage: storyStorage,
+  storage: memory,
   limits: { fileSize: 40 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const type = String(file.mimetype || '').toLowerCase();
@@ -111,13 +77,11 @@ export const storyUpload = multer({
   },
 });
 
-export function resolveUploadPath(storagePath) {
-  const root = path.resolve(UPLOAD_DIR);
-  const resolved = path.resolve(UPLOAD_DIR, storagePath);
-  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
-    throw new Error('Invalid upload path');
-  }
-  return resolved;
+/** Display / Drive object name helper (not a filesystem path). */
+export function newObjectName(prefix = '', ext = '') {
+  const safeExt = ext && SAFE_IMAGE_EXTS.has(ext.toLowerCase()) ? ext.toLowerCase() : ext || '';
+  const base = `${crypto.randomUUID()}${safeExt}`;
+  return prefix ? `${prefix.replace(/\/?$/, '/')}${base}` : base;
 }
 
-export { UPLOAD_DIR };
+export { getStorage };
