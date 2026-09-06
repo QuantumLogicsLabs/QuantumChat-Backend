@@ -2,8 +2,9 @@ import mongoose from 'mongoose';
 
 const STORY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_DURATION_MS = 60 * 1000;
-const MIN_TTL_MS = 15 * 60 * 1000;        // 15 minutes minimum
+const MIN_TTL_MS = 15 * 60 * 1000; // 15 minutes minimum
 const MAX_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days maximum
+const DRAFT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // keep drafts 30 days
 const HEX_64 = /^[0-9a-f]{64}$/i;
 
 const storyEnvelopeSchema = new mongoose.Schema(
@@ -40,16 +41,30 @@ const storySchema = new mongoose.Schema(
       font: { type: String, maxlength: 40, default: '' },
       align: { type: String, enum: ['', 'left', 'center', 'right'], default: '' },
     },
+    /** Intended live visibility window (applied when published). */
+    ttlMs: { type: Number, default: STORY_TTL_MS, min: MIN_TTL_MS, max: MAX_TTL_MS },
+    /**
+     * draft — owner-only, not live
+     * scheduled — owner-only until publishAt
+     * published — visible to audience until expiresAt
+     */
+    status: {
+      type: String,
+      enum: ['draft', 'scheduled', 'published'],
+      default: 'published',
+      index: true,
+    },
+    /** When status=scheduled, go live at this time. */
+    publishAt: { type: Date, default: null, index: true },
     expiresAt: { type: Date, required: true, index: true },
     sealed: { type: Boolean, default: false },
-     allowReplies: { type: Boolean, default: true },
+    allowReplies: { type: Boolean, default: true },
     /** AES-GCM IV for sealed media (base64); content key is in per-viewer envelopes. */
     contentIv: { type: String, default: undefined },
     envelopes: { type: [storyEnvelopeSchema], default: undefined },
     envelopeNonce: { type: String, default: undefined },
     envelopeEphemeralPublicKey: { type: String, default: undefined },
     envelopeTargetHint: { type: String, default: undefined },
-    // --- Story viewers  ---
     views: {
       type: [
         {
@@ -63,10 +78,14 @@ const storySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+storySchema.index({ status: 1, publishAt: 1 });
+storySchema.index({ user: 1, status: 1, updatedAt: -1 });
+
 storySchema.statics.ttlMs = STORY_TTL_MS;
 storySchema.statics.maxDurationMs = MAX_DURATION_MS;
 storySchema.statics.minTtlMs = MIN_TTL_MS;
 storySchema.statics.maxTtlMs = MAX_TTL_MS;
+storySchema.statics.draftRetentionMs = DRAFT_RETENTION_MS;
 
 storySchema.methods.toPublicJSON = function toPublicJSON() {
   return {
@@ -87,7 +106,11 @@ storySchema.methods.toPublicJSON = function toPublicJSON() {
             align: this.textStyle?.align || 'center',
           }
         : undefined,
+    ttlMs: this.ttlMs || STORY_TTL_MS,
+    status: this.status || 'published',
+    publishAt: this.publishAt || null,
     createdAt: this.createdAt,
+    updatedAt: this.updatedAt,
     expiresAt: this.expiresAt,
     sealed: Boolean(this.sealed),
     allowReplies: this.allowReplies !== false,
@@ -106,6 +129,7 @@ storySchema.methods.toPublicJSON = function toPublicJSON() {
     envelopeTargetHint: this.envelopeTargetHint || undefined,
   };
 };
+
 storySchema.methods.viewerCount = function viewerCount() {
   return Array.isArray(this.views) ? this.views.length : 0;
 };

@@ -19,6 +19,43 @@ function parseSealedFlag(value) {
   return s === 'true' || s === '1' || s === 'yes';
 }
 
+function parseStoryStatus(raw) {
+  const s = String(raw || 'published').toLowerCase();
+  if (s === 'draft' || s === 'scheduled' || s === 'published') return s;
+  return null;
+}
+
+function clampTtlMs(raw) {
+  let ttlMs = Number(raw || 0);
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) ttlMs = Story.ttlMs;
+  return Math.min(Math.max(ttlMs, Story.minTtlMs), Story.maxTtlMs);
+}
+
+function parsePublishAt(raw) {
+  if (raw == null || raw === '') return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
+
+function storyOwnerPayload(story, userDoc) {
+  return {
+    ...story.toPublicJSON(),
+    user: {
+      id: userDoc?._id || story.user,
+      username: userDoc?.username || 'User',
+      hasAvatar: Boolean(userDoc?.avatarPath),
+    },
+  };
+}
+
+function assertLiveOrOwner(story, viewerId) {
+  const status = story.status || 'published';
+  const ownerId = String(story.user?._id || story.user);
+  if (status === 'published') return true;
+  return ownerId === String(viewerId);
+}
+
 function parseEnvelopes(raw) {
   let list = raw;
   if (typeof raw === 'string') {
@@ -81,11 +118,22 @@ export async function createStory(req, res) {
     }
     if (mediaType === 'image') durationMs = 0;
 
-    let ttlMs = Number(req.body.ttlMs || 0);
-    if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
-      ttlMs = Story.ttlMs; // fallback to default (24h)
-    } else {
-      ttlMs = Math.min(Math.max(ttlMs, Story.minTtlMs), Story.maxTtlMs);
+    let ttlMs = clampTtlMs(req.body.ttlMs);
+
+    const status = parseStoryStatus(req.body.status);
+    if (!status) {
+      return res.status(400).json({ success: false, error: 'Invalid status (draft, scheduled, or published)' });
+    }
+
+    let publishAt = null;
+    if (status === 'scheduled') {
+      publishAt = parsePublishAt(req.body.publishAt);
+      if (!publishAt || publishAt.getTime() <= Date.now() + 30_000) {
+        return res.status(400).json({
+          success: false,
+          error: 'Scheduled stories need a publishAt at least 30 seconds in the future',
+        });
+      }
     }
 
     const caption =
@@ -117,10 +165,6 @@ export async function createStory(req, res) {
         });
       }
 
-      // --- Story privacy enforcement (new) ---
-      // Reject envelopes for viewers outside the author's configured story
-      // audience. Clients build the envelope list themselves, so this can't
-      // be trusted without a server-side check.
       const storyPrivacy = req.user.privacy?.story || 'everyone';
       if (storyPrivacy !== 'everyone') {
         const authorId = String(req.user._id);
@@ -159,6 +203,16 @@ export async function createStory(req, res) {
       String(req.user._id)
     );
 
+    const now = Date.now();
+    let expiresAt;
+    if (status === 'draft') {
+      expiresAt = new Date(now + Story.draftRetentionMs);
+    } else if (status === 'scheduled') {
+      expiresAt = new Date(publishAt.getTime() + ttlMs);
+    } else {
+      expiresAt = new Date(now + ttlMs);
+    }
+
     const story = await Story.create({
       user: req.user._id,
       mediaType,
@@ -169,24 +223,22 @@ export async function createStory(req, res) {
       storageProvider: stored.provider,
       durationMs,
       caption,
-     expiresAt: new Date(Date.now() + ttlMs),
+      ttlMs,
+      status,
+      publishAt: status === 'scheduled' ? publishAt : null,
+      expiresAt,
       sealed,
       allowReplies,
       contentIv: sealed ? contentIv : undefined,
       envelopes: sealed ? envelopes : undefined,
     });
 
-    const payload = {
-      ...story.toPublicJSON(),
-      user: {
-        id: req.user._id,
-        username: req.user.username,
-        hasAvatar: Boolean(req.user.avatarPath),
-      },
-    };
+    const payload = storyOwnerPayload(story, req.user);
 
-    const io = req.app.get('io');
-    if (io) io.emit('story:new', payload);
+    if (status === 'published') {
+      const io = req.app.get('io');
+      if (io) io.emit('story:new', payload);
+    }
 
     res.status(201).json({ success: true, data: payload });
   } catch (err) {
@@ -198,7 +250,10 @@ export async function listStories(req, res) {
   try {
     const now = new Date();
     const blocked = new Set((req.user.blockedUsers || []).map(String));
-    const stories = await Story.find({ expiresAt: { $gt: now } })
+    const stories = await Story.find({
+      status: { $nin: ['draft', 'scheduled'] },
+      expiresAt: { $gt: now },
+    })
       .sort({ createdAt: -1 })
       .populate('user', 'username avatarPath');
 
@@ -216,7 +271,6 @@ export async function listStories(req, res) {
       filtered.push({
         ...(() => {
           const pub = story.toPublicJSON();
-          // Only ship this viewer's envelope — smaller list payload, faster unlock.
           if (pub.sealed && Array.isArray(pub.envelopes)) {
             pub.envelopes = pub.envelopes.filter((e) => String(e.user) === viewerId);
           }
@@ -235,6 +289,25 @@ export async function listStories(req, res) {
     res.status(500).json({ success: false, error: err.message });
   }
 }
+
+/** Owner-only drafts + scheduled stories. */
+export async function listMyDrafts(req, res) {
+  try {
+    const now = new Date();
+    const stories = await Story.find({
+      user: req.user._id,
+      status: { $in: ['draft', 'scheduled'] },
+      expiresAt: { $gt: now },
+    }).sort({ updatedAt: -1 });
+
+    res.json({
+      success: true,
+      data: stories.map((s) => storyOwnerPayload(s, req.user)),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
 export async function getStoryById(req, res) {
   try {
     const { id } = req.params;
@@ -246,20 +319,28 @@ export async function getStoryById(req, res) {
       return res.status(404).json({ success: false, error: 'Story not found or expired' });
     }
     const ownerId = String(story.user?._id || story.user);
+    const viewerId = String(req.user._id);
+    if (!assertLiveOrOwner(story, viewerId)) {
+      return res.status(404).json({ success: false, error: 'Story not found or expired' });
+    }
     if (await areUsersBlocked(req.user._id, ownerId)) {
       return res.status(403).json({ success: false, error: 'Not allowed' });
     }
-    if (story.sealed) {
+    if ((story.status || 'published') === 'published' && story.sealed) {
       const envelopes = story.envelopes || [];
-      const allowed = envelopes.some((e) => String(e.user) === String(req.user._id));
+      const allowed = envelopes.some((e) => String(e.user) === viewerId);
       if (!allowed) {
         return res.status(404).json({ success: false, error: 'Story not found or expired' });
       }
     }
+    const pub = story.toPublicJSON();
+    if (pub.sealed && Array.isArray(pub.envelopes) && ownerId !== viewerId) {
+      pub.envelopes = pub.envelopes.filter((e) => String(e.user) === viewerId);
+    }
     res.json({
       success: true,
       data: {
-        ...story.toPublicJSON(),
+        ...pub,
         user: {
           id: ownerId,
           username: story.user?.username || 'User',
@@ -271,6 +352,7 @@ export async function getStoryById(req, res) {
     res.status(500).json({ success: false, error: err.message });
   }
 }
+
 export async function getStoryMedia(req, res) {
   try {
     const { id } = req.params;
@@ -281,13 +363,17 @@ export async function getStoryMedia(req, res) {
     if (!story || story.expiresAt <= new Date()) {
       return res.status(404).json({ success: false, error: 'Story not found or expired' });
     }
+    const viewerId = String(req.user._id);
+    if (!assertLiveOrOwner(story, viewerId)) {
+      return res.status(404).json({ success: false, error: 'Story not found or expired' });
+    }
     if (await areUsersBlocked(req.user._id, story.user)) {
       return res.status(403).json({ success: false, error: 'Not allowed' });
     }
 
     if (story.sealed) {
       const envelopes = story.envelopes || [];
-      const allowed = envelopes.some((e) => String(e.user) === String(req.user._id));
+      const allowed = envelopes.some((e) => String(e.user) === viewerId);
       if (!allowed) {
         return res.status(403).json({
           success: false,
@@ -333,13 +419,12 @@ export async function markStoryViewed(req, res) {
       return res.status(400).json({ success: false, error: 'Invalid story id' });
     }
     const story = await Story.findById(id);
-    if (!story || story.expiresAt <= new Date()) {
+    if (!story || story.expiresAt <= new Date() || (story.status || 'published') !== 'published') {
       return res.status(404).json({ success: false, error: 'Story not found or expired' });
     }
     const ownerId = String(story.user);
     const viewerId = String(req.user._id);
 
-    // Don't record self-views, and respect the same blocked-user gate as reads.
     if (viewerId === ownerId) {
       return res.json({ success: true, data: { recorded: false } });
     }
@@ -348,23 +433,27 @@ export async function markStoryViewed(req, res) {
     }
 
     const result = await Story.updateOne(
-  { _id: id, 'views.user': { $ne: req.user._id } },
-  { $push: { views: { user: req.user._id, viewedAt: new Date() } } }
-  );
-  const wasNewView = result.modifiedCount === 1;
+      { _id: id, 'views.user': { $ne: req.user._id } },
+      { $push: { views: { user: req.user._id, viewedAt: new Date() } } }
+    );
+    const wasNewView = result.modifiedCount === 1;
 
-  if (wasNewView) {
-    const io = req.app.get('io');
-    if (io) {
-      const updated = await Story.findById(id).select('views');
-      io.to(ownerId).emit('story:viewed', {
-        storyId: String(story._id),
-        viewer: { id: viewerId, username: req.user.username, hasAvatar: Boolean(req.user.avatarPath) },
-        viewedAt: new Date().toISOString(),
-        viewerCount: updated.views.length,
-      });
+    if (wasNewView) {
+      const io = req.app.get('io');
+      if (io) {
+        const updated = await Story.findById(id).select('views');
+        io.to(ownerId).emit('story:viewed', {
+          storyId: String(story._id),
+          viewer: {
+            id: viewerId,
+            username: req.user.username,
+            hasAvatar: Boolean(req.user.avatarPath),
+          },
+          viewedAt: new Date().toISOString(),
+          viewerCount: updated.views.length,
+        });
+      }
     }
-  }
 
     res.json({ success: true, data: { recorded: wasNewView } });
   } catch (err) {
@@ -403,6 +492,110 @@ export async function getStoryViewers(req, res) {
   }
 }
 
+/** Update draft/scheduled settings (ttl, schedule, allowReplies, caption). */
+export async function updateStory(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid story id' });
+    }
+    const story = await Story.findById(id);
+    if (!story) return res.status(404).json({ success: false, error: 'Story not found' });
+    if (String(story.user) !== String(req.user._id)) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+    if (!['draft', 'scheduled'].includes(story.status || '')) {
+      return res.status(400).json({ success: false, error: 'Only drafts or scheduled stories can be edited' });
+    }
+
+    if (req.body.ttlMs !== undefined) {
+      story.ttlMs = clampTtlMs(req.body.ttlMs);
+    }
+    if (req.body.allowReplies !== undefined) {
+      story.allowReplies = parseSealedFlag(req.body.allowReplies);
+    }
+    if (!story.sealed && typeof req.body.caption === 'string') {
+      story.caption = req.body.caption.trim().slice(0, 200);
+    }
+
+    const nextStatus = req.body.status !== undefined ? parseStoryStatus(req.body.status) : story.status;
+    if (!nextStatus || nextStatus === 'published') {
+      // Publishing goes through publishStory
+      if (req.body.status === 'published') {
+        return res.status(400).json({
+          success: false,
+          error: 'Use POST /stories/:id/publish to publish',
+        });
+      }
+      if (!nextStatus) {
+        return res.status(400).json({ success: false, error: 'Invalid status' });
+      }
+    }
+
+    if (nextStatus === 'draft') {
+      story.status = 'draft';
+      story.publishAt = null;
+      story.expiresAt = new Date(Date.now() + Story.draftRetentionMs);
+    } else if (nextStatus === 'scheduled') {
+      const publishAt =
+        req.body.publishAt !== undefined ? parsePublishAt(req.body.publishAt) : story.publishAt;
+      if (!publishAt || publishAt.getTime() <= Date.now() + 30_000) {
+        return res.status(400).json({
+          success: false,
+          error: 'Scheduled stories need a publishAt at least 30 seconds in the future',
+        });
+      }
+      story.status = 'scheduled';
+      story.publishAt = publishAt;
+      story.expiresAt = new Date(publishAt.getTime() + story.ttlMs);
+    }
+
+    await story.save();
+    res.json({ success: true, data: storyOwnerPayload(story, req.user) });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+/** Publish a draft or scheduled story immediately. */
+export async function publishStory(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid story id' });
+    }
+    const story = await Story.findById(id);
+    if (!story) return res.status(404).json({ success: false, error: 'Story not found' });
+    if (String(story.user) !== String(req.user._id)) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+    if (!['draft', 'scheduled'].includes(story.status || '')) {
+      return res.status(400).json({ success: false, error: 'Story is already published' });
+    }
+
+    if (req.body.ttlMs !== undefined) {
+      story.ttlMs = clampTtlMs(req.body.ttlMs);
+    }
+    if (req.body.allowReplies !== undefined) {
+      story.allowReplies = parseSealedFlag(req.body.allowReplies);
+    }
+
+    const now = Date.now();
+    story.status = 'published';
+    story.publishAt = new Date(now);
+    story.expiresAt = new Date(now + (story.ttlMs || Story.ttlMs));
+    await story.save();
+
+    const payload = storyOwnerPayload(story, req.user);
+    const io = req.app.get('io');
+    if (io) io.emit('story:new', payload);
+
+    res.json({ success: true, data: payload });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
 export async function deleteStory(req, res) {
   try {
     const { id } = req.params;
@@ -419,9 +612,10 @@ export async function deleteStory(req, res) {
     } catch {
       // ignore
     }
+    const wasPublished = (story.status || 'published') === 'published';
     await Story.deleteOne({ _id: story._id });
     const io = req.app.get('io');
-    if (io) io.emit('story:deleted', { id });
+    if (io && wasPublished) io.emit('story:deleted', { id });
     res.json({ success: true, data: { id } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
