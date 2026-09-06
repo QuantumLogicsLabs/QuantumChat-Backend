@@ -6,6 +6,7 @@ import { connectDB } from "./src/config/db.js";
 import { allowedOrigins } from "./src/config/corsOrigins.js";
 import { runBirthdayNotifications } from "./src/jobs/birthdayNotifications.js";
 import { runExpiryJobs } from "./src/jobs/expireMessages.js";
+import { runStoryPublishJobs } from "./src/jobs/publishScheduledStories.js";
 import FriendRequest from "./src/models/FriendRequest.js";
 import { attachSocket } from "./src/socket/index.js";
 
@@ -42,6 +43,14 @@ async function main() {
   setTimeout(() => {
     runExpiryJobs(io).catch((err) => console.error("Expiry job failed:", err.message));
   }, 5_000);
+
+  const STORY_PUBLISH_INTERVAL_MS = 30_000;
+  setInterval(() => {
+    runStoryPublishJobs(io).catch((err) => console.error("Story publish job failed:", err.message));
+  }, STORY_PUBLISH_INTERVAL_MS);
+  setTimeout(() => {
+    runStoryPublishJobs(io).catch((err) => console.error("Story publish job failed:", err.message));
+  }, 8_000);
 
   const BIRTHDAY_CHECK_INTERVAL_MS = 60_000; // must stay <= the job's 1-minute window
   setInterval(() => {

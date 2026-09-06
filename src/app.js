@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import mongoose from 'mongoose';
 import { allowedOrigins } from './config/corsOrigins.js';
 import { runBirthdayNotifications } from './jobs/birthdayNotifications.js';
+import { runStoryPublishJobs } from './jobs/publishScheduledStories.js';
 import { publicApiIpLimiter } from './middleware/apiKeyAuth.js';
 import { authLimiter } from './middleware/rateLimiter.js';
 import activityRoutes from './routes/activityRoutes.js';
@@ -105,6 +106,21 @@ app.use('/api/activity', activityRoutes);
         res.json({ success: true, data: { notifiedCount } });
       } catch (err) {
         console.error('Birthday cron sweep failed:', err.message);
+        res.status(500).json({ success: false, error: 'Sweep failed' });
+      }
+    });
+
+    app.get('/api/cron/stories-publish', async (req, res) => {
+      const provided = req.headers['x-cron-secret'] || req.query.secret;
+      if (!process.env.CRON_SECRET || provided !== process.env.CRON_SECRET) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+      try {
+        const io = req.app.get('io');
+        const publishedCount = await runStoryPublishJobs(io);
+        res.json({ success: true, data: { publishedCount } });
+      } catch (err) {
+        console.error('Story publish cron failed:', err.message);
         res.status(500).json({ success: false, error: 'Sweep failed' });
       }
     });
