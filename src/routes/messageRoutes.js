@@ -10,6 +10,7 @@ import {
   publishQuantumAIDirectResponse,
   checkForwardAllowed,
   openViewOnce,
+  upsertTranscriptState,
   getMessageInfo,
   getImportantMessages,
   markMessageImportant,
@@ -49,6 +50,7 @@ router.post('/quantum-ai-response', publishQuantumAIDirectResponse);
 router.get('/important', getImportantMessages);
 router.get('/:messageId/forward-check', checkForwardAllowed);
 router.post('/:messageId/view-once', openViewOnce);
+router.post('/:messageId/transcription', upsertTranscriptState);
 router.get('/:messageId/info', getMessageInfo);
 router.post('/:messageId/important', markMessageImportant);
 router.delete('/:messageId/important', unmarkMessageImportant);

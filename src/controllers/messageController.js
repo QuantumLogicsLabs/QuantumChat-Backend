@@ -10,6 +10,10 @@ import { notifyUser } from '../services/pushService.js';
 import { conversationKey, parseConversationKey } from '../utils/conversationKey.js';
 import { notExpiredFilter, resolveExpiresAt } from '../utils/messageExpiry.js';
 import { sealForPublicKey } from '../utils/sealedBox.js';
+import {
+  getDirectTranscriptTargetKey,
+  isDirectTranscriptTargetAllowed,
+} from '../utils/transcriptionAccess.js';
 import { toObjectId } from '../utils/toObjectId.js';
 
 const HEX_64 = /^[0-9a-f]{64}$/i;
@@ -203,6 +207,25 @@ export function toClientMessage(doc, viewerId) {
       message.attachment = null;
       message.locked = true;
     }
+  }
+  if (message.transcription) {
+    const entries = Array.isArray(message.transcription.entries)
+      ? message.transcription.entries
+      : [];
+    message.transcription = {
+      ...message.transcription,
+      claimToken: undefined,
+      claimLeaseUntil: undefined,
+      claimedBy: undefined,
+      entries: entries
+        .filter((entry) => Boolean(viewerId) && String(entry.user) === String(viewerId))
+        .map((entry) => ({
+          ...entry,
+          user: entry.user?.toString?.() || String(entry.user),
+          claimToken: undefined,
+          claimLeaseUntil: undefined,
+        })),
+    };
   }
   return message;
 }
@@ -488,6 +511,142 @@ export async function checkForwardAllowed(req, res) {
     }
     const verdict = evaluateForwardPolicy(original);
     return res.json({ success: true, data: verdict });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, error: err.message });
+  }
+}
+
+export async function upsertTranscriptState(req, res) {
+  try {
+    const { messageId } = req.params;
+    const messageOid = toObjectId(messageId);
+    if (!messageOid) {
+      return res.status(400).json({ success: false, error: 'Invalid message id' });
+    }
+    const message = await Message.findById(messageOid);
+    if (!message) return res.status(404).json({ success: false, error: 'Message not found' });
+    const userId = String(req.user._id);
+    const expectedTargetPublicKey = getDirectTranscriptTargetKey(message, userId);
+    if (!expectedTargetPublicKey) {
+      return res.status(403).json({ success: false, error: 'Only direct-message participants can manage transcript state' });
+    }
+    if (message.viewOnce) {
+      return res.status(403).json({ success: false, error: 'View-once voice messages cannot be transcribed' });
+    }
+
+    const { action = 'claim', claimToken, status, language, encryptedText, nonce, ephemeralPublicKey, targetPublicKey, error } = req.body || {};
+    const transcription = message.transcription || {};
+    const entries = transcription.entries || [];
+    if (!transcription.entries) transcription.entries = entries;
+    let participant = entries.find((entry) => String(entry.user) === userId);
+
+    const participantPayload = (entry, includeClaimToken = false) => {
+      const payload = entry?.toObject ? entry.toObject() : { ...entry };
+      payload.user = String(payload.user);
+      if (!includeClaimToken) {
+        delete payload.claimToken;
+        delete payload.claimLeaseUntil;
+      }
+      return payload;
+    };
+
+    if (action === 'claim') {
+      if (participant?.status === 'completed' && participant.encryptedText) {
+        return res.json({
+          success: true,
+          data: { transcription: { participant: participantPayload(participant) } },
+        });
+      }
+      if (participant?.claimLeaseUntil && new Date(participant.claimLeaseUntil).getTime() > Date.now()) {
+        return res.status(409).json({ success: false, error: 'Transcript is already being generated for this participant' });
+      }
+
+      const token = crypto.randomBytes(16).toString('hex');
+      const lease = new Date(Date.now() + 60_000);
+      if (!participant) {
+        transcription.entries.push({
+          user: req.user._id,
+          status: 'running',
+          model: transcription.model || 'Xenova/whisper-tiny',
+          revision: transcription.revision || '5332fcc35e32a33b86612b9a57a89be7906102b1',
+          claimToken: token,
+          claimLeaseUntil: lease,
+          language: typeof language === 'string' ? language.slice(0, 32) : undefined,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        participant = transcription.entries[transcription.entries.length - 1];
+      } else {
+        participant.status = 'running';
+        participant.claimToken = token;
+        participant.claimLeaseUntil = lease;
+        participant.language = typeof language === 'string' ? language.slice(0, 32) : participant.language;
+        participant.error = undefined;
+        participant.updatedAt = new Date();
+      }
+      message.transcription = transcription;
+      await message.save();
+      return res.json({
+        success: true,
+        data: { transcription: { participant: participantPayload(participant, true) } },
+      });
+    }
+
+    if (action === 'release') {
+      if (!participant || !claimToken || String(claimToken) !== String(participant.claimToken || '')) {
+        return res.status(409).json({ success: false, error: 'Transcript claim token is invalid or expired' });
+      }
+      participant.status = 'failed';
+      participant.claimToken = undefined;
+      participant.claimLeaseUntil = null;
+      participant.error = typeof error === 'string' && error.trim() ? error.slice(0, 500) : undefined;
+      participant.updatedAt = new Date();
+      message.transcription = transcription;
+      await message.save();
+      return res.json({
+        success: true,
+        data: { transcription: { participant: participantPayload(participant) } },
+      });
+    }
+
+    if (action === 'commit') {
+      if (!participant || !claimToken || String(claimToken) !== String(participant.claimToken || '')) {
+        return res.status(409).json({ success: false, error: 'Transcript claim token is invalid or expired' });
+      }
+      if (!participant.claimLeaseUntil || new Date(participant.claimLeaseUntil).getTime() < Date.now()) {
+        return res.status(409).json({ success: false, error: 'Transcript claim has expired' });
+      }
+      if (!encryptedText || !nonce || !ephemeralPublicKey || !targetPublicKey) {
+        return res.status(400).json({ success: false, error: 'Transcript ciphertext and envelope metadata are required' });
+      }
+      if (
+        !HEX_64.test(ephemeralPublicKey) ||
+        !isDirectTranscriptTargetAllowed(message, userId, targetPublicKey)
+      ) {
+        return res.status(403).json({ success: false, error: 'Transcript envelope must target the authenticated participant' });
+      }
+
+      participant.status = typeof status === 'string' ? status : 'completed';
+      participant.language = typeof language === 'string' ? language.slice(0, 32) : participant.language;
+      participant.claimToken = undefined;
+      participant.claimLeaseUntil = null;
+      participant.encryptedText = String(encryptedText);
+      participant.nonce = String(nonce);
+      participant.ephemeralPublicKey = String(ephemeralPublicKey).toLowerCase();
+      participant.targetPublicKey = String(targetPublicKey).toLowerCase();
+      participant.error = typeof error === 'string' && error.trim() ? error.slice(0, 500) : undefined;
+      participant.updatedAt = new Date();
+      transcription.model = transcription.model || 'Xenova/whisper-tiny';
+      transcription.revision = transcription.revision || '5332fcc35e32a33b86612b9a57a89be7906102b1';
+      message.transcription = transcription;
+      await message.save();
+      return res.json({
+        success: true,
+        data: { transcription: { participant: participantPayload(participant) } },
+      });
+    }
+
+    return res.status(400).json({ success: false, error: 'Unsupported transcript action' });
   } catch (err) {
     res.status(err.status || 500).json({ success: false, error: err.message });
   }
