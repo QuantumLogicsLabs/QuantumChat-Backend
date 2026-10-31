@@ -1,38 +1,39 @@
 import { Router } from 'express';
-import { requireAuthLean} from '../middleware/auth.js';
-import { groupPhotoUpload } from '../middleware/upload.js';
-import { apiLimiter } from '../middleware/rateLimiter.js';
 import {
-  createGroup,
-  listGroups,
-  getGroup,
-  sendGroupMessage,
-  getGroupMessages,
-  renameGroup,
-  updateGroup,
-  updateCommandCenter,
-  addMembers,
-  removeMember,
-  deleteGroup,
-  uploadGroupPhoto,
-  getGroupPhoto,
-  setInviteLink,
-  previewInvite,
-  joinViaInvite,
-  addAdmin,
-  removeAdmin,
-  pinMessage,
-  unpinMessage,
-    votePoll,
-  markGroupMessagesRead,
-  publishQuantumAIGroupResponse,
-  discoverGroups,
-  joinPublicGroup,
-  createJoinRequest,
-  listJoinRequests,
   acceptJoinRequest,
+  addAdmin,
+  addMembers,
+  createGroup,
+  createJoinRequest,
+  deleteGroup,
+  discoverGroups,
+  getGroup,
+  getGroupMessages,
+  getGroupPhoto,
+  joinPublicGroup,
+  joinViaInvite,
+  listGroups,
+  listJoinRequests,
+  markGroupMessagesRead,
+  pinMessage,
+  previewInvite,
+  publishQuantumAIGroupResponse,
   rejectJoinRequest,
+  removeAdmin,
+  removeMember,
+  renameGroup,
+  sendGroupMessage,
+  setInviteLink,
+  unpinMessage,
+  updateCommandCenter,
+  updateGroup,
+  uploadGroupPhoto,
+  votePoll,
 } from '../controllers/groupController.js';
+import { requireAuthLean } from '../middleware/auth.js';
+import { readChatUnlock } from '../middleware/chatLockAuth.js';
+import { apiLimiter } from '../middleware/rateLimiter.js';
+import { groupPhotoUpload } from '../middleware/upload.js';
 
 const router = Router();
 
@@ -40,6 +41,7 @@ const router = Router();
 // on authorization/DB route handlers (requireAuth touches the user store).
 router.use(apiLimiter);
 router.use(requireAuthLean);
+router.use(readChatUnlock);
 
 router.get('/', listGroups);
 router.post('/', createGroup);
