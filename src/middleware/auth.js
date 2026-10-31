@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
 import DeviceSession from '../models/DeviceSession.js';
+import User from '../models/User.js';
 
 export async function requireAuth(req, res, next) {
   try {
@@ -59,7 +59,7 @@ export async function requireAuthLean(req, res, next) {
       return res.status(401).json({ success: false, error: '2FA verification required' });
     }
     const user = await User.findById(payload.id)
-      .select('_id username blockedUsers friends mutedChats clearedConversations notificationSettings vaultedPeers privacy publicKeys')
+      .select('_id username blockedUsers friends mutedChats clearedConversations notificationSettings vaultedPeers privacy publicKeys lockedChat')
       .lean();
     if (!user) {
       return res.status(401).json({ success: false, error: 'User not found' });
