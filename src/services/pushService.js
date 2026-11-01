@@ -186,6 +186,11 @@ export async function removeSubscription(userId, endpoint) {
   }
   await PushSubscription.deleteOne({ user: userId, endpoint: ep });
 }
+async function isChatLockedFor(userId, conversationKey) {
+      if (!conversationKey) return false;
+      const user = await User.findById(userId).select('lockedChats').lean();
+      return Boolean(user?.lockedChats?.some((l) => l.conversationKey === conversationKey));
+    }
 
 async function shouldSendPush(userId, payload) {
   const user = await User.findById(userId)
@@ -253,6 +258,16 @@ export async function notifyUser(userId, payload) {
 
   const allowed = await shouldSendPush(uid, payload).catch(() => true);
   if (!allowed) return;
+  if (await isChatLockedFor(uid, payload?.conversationKey).catch(() => false)) {
+      payload = {
+        title: 'QuantumChat',
+        body: 'New message',
+        kind: 'dm',
+        tag: 'quantumchat-locked',
+        url: '/chat',
+        silent: payload?.silent === true,
+      };
+    }
 
   const subs = await PushSubscription.find({ user: uid });
    if (!subs.length) {

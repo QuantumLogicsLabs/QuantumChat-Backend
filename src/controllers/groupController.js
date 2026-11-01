@@ -8,6 +8,7 @@ import User from '../models/User.js';
 import { incrementCiphertextsRelayed } from '../services/blindnessStats.js';
 import { createNotification } from '../services/notificationService.js';
 import { notifyUser } from '../services/pushService.js';
+import { isConversationLocked } from '../utils/chatLock.js';
 import { notExpiredFilter, resolveExpiresAt } from '../utils/messageExpiry.js';
 import { sealForPublicKey } from '../utils/sealedBox.js';
 import { toObjectId } from '../utils/toObjectId.js';
@@ -1581,6 +1582,9 @@ export async function getGroupMessages(req, res) {
     if (!group) return res.status(404).json({ success: false, error: 'Group not found' });
     if (!group.isMember(req.user._id)) {
       return res.status(403).json({ success: false, error: 'Not a group member' });
+    }
+    if (!req.chatLockUnlocked && isConversationLocked(req.user, `group:${groupOid}`)) {
+      return res.status(423).json({ success: false, code: 'CHAT_LOCKED', error: 'This chat is locked' });
     }
 
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 80, 1), 200);

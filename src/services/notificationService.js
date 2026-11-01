@@ -1,4 +1,5 @@
 import Notification from '../models/Notification.js';
+import User from '../models/User.js';
 import { notifyUser } from './pushService.js';
 
 /**
@@ -83,6 +84,9 @@ export async function upsertMessageNotification({ recipient, actor, conversation
   const recipientId = String(recipient);
   const actorId = String(actor);
   if (recipientId === actorId) return null;
+   const recipientDoc = await User.findById(recipientId).select('lockedChats').lean();
+    if (recipientDoc?.lockedChats?.some((l) => l.conversationKey === conversationKey)) return null;
+
 
   const existing = await Notification.findOneAndDelete({
     recipient: recipientId,
