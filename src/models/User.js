@@ -314,6 +314,18 @@ const userSchema = new mongoose.Schema(
         addedAt: { type: Date, default: Date.now },
       },
     ],
+    // Chat Lock: one PIN per user, plus the set of conversations it protects.
+    chatLockPinHash: { type: String, select: false, default: null },
+    chatLockEnabled: { type: Boolean, default: false },
+    chatLockFailedAttempts: { type: Number, default: 0, select: false },
+    chatLockLockedUntil: { type: Date, default: null, select: false },
+    lockedChats: [
+      {
+        _id: false,
+        conversationKey: { type: String, required: true },
+        addedAt: { type: Date, default: Date.now },
+      },
+    ],
     publicKeys: {
       type: [String],
       required: true,
@@ -502,6 +514,17 @@ userSchema.methods.createVaultUnlockToken = function createVaultUnlockToken() {
     { algorithm: 'HS256', expiresIn: '15m' }
   );
 };
+userSchema.methods.compareChatLockPin = function compareChatLockPin(candidate) {
+      if (!this.chatLockPinHash) return Promise.resolve(false);
+      return bcrypt.compare(String(candidate || ''), this.chatLockPinHash);
+    };
+    userSchema.methods.createChatLockToken = function createChatLockToken() {
+      return jwt.sign(
+        { sub: String(this._id), scope: 'chatlock' },
+        process.env.JWT_SECRET,
+        { algorithm: 'HS256', expiresIn: '10m' }
+      );
+    };
 userSchema.methods.createEmailVerifyToken = function createEmailVerifyToken() {
   const token = crypto.randomBytes(32).toString('hex');
   this.emailVerifyToken = crypto.createHash('sha256').update(token).digest('hex');
@@ -691,6 +714,8 @@ userSchema.methods.toSelfJSON = function toSelfJSON() {
       markedAt: entry.markedAt,
     })) : [],
     totpEnabled: Boolean(this.totpEnabled),
+    chatLockEnabled: Boolean(this.chatLockEnabled),
+    lockedChats: Array.isArray(this.lockedChats) ? this.lockedChats.map((l) => l.conversationKey) : [],
     referralCode: this.referralCode || null,
   };
 };

@@ -70,7 +70,7 @@ export function createApp() {
         return callback(null, false);
       },
       methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id', 'X-API-Key', 'x-vault-token'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id', 'X-API-Key', 'x-vault-token', 'x-chat-lock-token'],
       optionsSuccessStatus: 204,
     })
   );

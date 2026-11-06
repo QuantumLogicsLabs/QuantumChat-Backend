@@ -1,38 +1,26 @@
 import { Router } from 'express';
+import { createAiCapsule, listAiCapsules } from '../controllers/capsuleController.js';
 import {
-  listUsers,
-  getUser,
-  updatePublicKeys,
-  updateProfile,
-  updateLanguage,
-  updatePrivacy,
-  blockUser,
-  unblockUser,
-  listBlockedUsers,
-  uploadAvatar,
-  deleteAvatar,
-  getAvatar,
-  exportAccountData,
-  deleteAccount,
-  discoverUsers,
-  lookupContact,
-  listFriends,
-  listFriendRequests,
-  sendFriendRequest,
-  cancelFriendRequest,
-  acceptFriendRequest,
-  declineFriendRequest,
-  removeFriend,
-  getMe,
-  getMyPublicKeys,
-  getMyReferrals,
-  getNotificationSettings,
-  updateNotificationSettings,
-  muteChat,
-  unmuteChat,
-  clearConversation,
-  undoClearConversation,
-} from '../controllers/userController.js';
+  createChatFolder,
+  deleteChatFolder,
+  listChatFolders,
+  setChatFolderMembership,
+  updateChatFolder,
+} from '../controllers/chatFolderController.js';
+import {
+  disableChatLock,
+  getChatLockStatus,
+  lockChat,
+  setChatLockPin,
+  unlockChat,
+  verifyChatLockPin,
+} from '../controllers/chatLockController.js';
+import {
+  approveLinkRequest,
+  createLinkRequest,
+  rejectLinkRequest,
+  sendLinkEmail,
+} from '../controllers/deviceLinkController.js';
 import {
   getPushVapidPublicKey,
   subscribePush,
@@ -40,36 +28,56 @@ import {
 } from '../controllers/pushController.js';
 import { listSessions, revokeSession } from '../controllers/sessionController.js';
 import {
-  createLinkRequest,
-  approveLinkRequest,
-  rejectLinkRequest,
-  sendLinkEmail,
-} from '../controllers/deviceLinkController.js';
-import { getVault, putVault, deleteVault } from '../controllers/vaultController.js';
-import { createAiCapsule, listAiCapsules } from '../controllers/capsuleController.js';
-import { requireAuth } from '../middleware/auth.js';
-import { avatarUpload } from '../middleware/upload.js';
-import { apiLimiter, contactLookupLimiter, vaultAuthLimiter } from '../middleware/rateLimiter.js';
+  acceptFriendRequest,
+  blockUser,
+  cancelFriendRequest,
+  clearConversation,
+  declineFriendRequest,
+  deleteAccount,
+  deleteAvatar,
+  discoverUsers,
+  exportAccountData,
+  getAvatar,
+  getMe,
+  getMyPublicKeys,
+  getMyReferrals,
+  getNotificationSettings,
+  getUser,
+  listBlockedUsers,
+  listFriendRequests,
+  listFriends,
+  listUsers,
+  lookupContact,
+  muteChat,
+  removeFriend,
+  sendFriendRequest,
+  unblockUser,
+  undoClearConversation,
+  unmuteChat,
+  updateLanguage,
+  updateNotificationSettings,
+  updatePrivacy,
+  updateProfile,
+  updatePublicKeys,
+  uploadAvatar,
+} from '../controllers/userController.js';
 import {
+  disableVault,
   getVaultStatus,
   setVaultPassword,
   unlockVault,
-  disableVault,
 } from '../controllers/vaultAuthController.js';
+import { deleteVault, getVault, putVault } from '../controllers/vaultController.js';
 import {
   addToVault,
-  removeFromVault,
-  listVaultedPeerIds,
   getPeerVaultDecoyStatus,
+  listVaultedPeerIds,
+  removeFromVault,
 } from '../controllers/vaultMembershipController.js';
+import { requireAuth } from '../middleware/auth.js';
+import { apiLimiter, chatLockLimiter, contactLookupLimiter, vaultAuthLimiter } from '../middleware/rateLimiter.js';
+import { avatarUpload } from '../middleware/upload.js';
 import { readVaultUnlock } from '../middleware/vaultAuth.js';
-import {
-  listChatFolders,
-  createChatFolder,
-  updateChatFolder,
-  setChatFolderMembership,
-  deleteChatFolder,
-} from '../controllers/chatFolderController.js';
 
 const router = Router();
 
@@ -108,6 +116,12 @@ router.get('/me/referrals', getMyReferrals);
 router.get('/me/vault', getVault);
 router.put('/me/vault', putVault);
 router.delete('/me/vault', deleteVault);
+router.get('/me/chat-lock/status', getChatLockStatus);
+router.post('/me/chat-lock/set-pin', chatLockLimiter, setChatLockPin);
+router.post('/me/chat-lock/verify', chatLockLimiter, verifyChatLockPin);
+router.post('/me/chat-lock/disable', chatLockLimiter, disableChatLock);
+router.post('/me/chat-lock/lock', lockChat);
+router.post('/me/chat-lock/unlock', chatLockLimiter, unlockChat);
 router.post('/me/ai-capsules', createAiCapsule);
 router.get('/me/ai-capsules', listAiCapsules);
 router.get('/me/push/vapid-public-key', getPushVapidPublicKey);
