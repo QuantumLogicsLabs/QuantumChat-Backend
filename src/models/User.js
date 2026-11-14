@@ -440,6 +440,10 @@ friends: [
       ref: 'User',
       default: null,
     },
+    hasSeenTour: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
@@ -657,6 +661,7 @@ userSchema.methods.toSelfJSON = function toSelfJSON() {
     })) : [],
     totpEnabled: Boolean(this.totpEnabled),
     referralCode: this.referralCode || null,
+    hasSeenTour: Boolean(this.hasSeenTour),
   };
 };
 

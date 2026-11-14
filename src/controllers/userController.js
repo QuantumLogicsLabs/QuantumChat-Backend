@@ -210,7 +210,7 @@ export async function updatePrivacy(req, res) {
 
 export async function updateProfile(req, res) {
   try {
-    const { displayName, statusText, bio, phone, username, privacy, dateOfBirth, timezone, preferredLanguage, transliteratedNames } = req.body || {};
+    const { displayName, statusText, bio, phone, username, privacy, dateOfBirth, timezone, preferredLanguage, transliteratedNames, hasSeenTour } = req.body || {};
     const user = req.user;
 
     if (preferredLanguage != null) {
@@ -219,6 +219,10 @@ export async function updateProfile(req, res) {
         return res.status(400).json({ success: false, error: 'Invalid preferred language format' });
       }
       user.preferredLanguage = lang;
+    }
+
+    if (typeof hasSeenTour === 'boolean') {
+      user.hasSeenTour = hasSeenTour;
     }
 
     if (transliteratedNames && typeof transliteratedNames === 'object') {
