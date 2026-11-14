@@ -3,6 +3,7 @@ import User from '../models/User.js';
 import { createNotification } from '../services/notificationService.js';
 import { notifyUser } from '../services/pushService.js';
 import { canUserInviteToCall, isSealedEnvelope } from '../utils/callEnvelope.js';
+import { canRelayLiveSignal } from '../utils/liveAccess.js';
 import { toObjectId } from '../utils/toObjectId.js';
 const ALLOWED_EVENTS = new Set([
   'call:invite',
@@ -19,6 +20,11 @@ const ALLOWED_EVENTS = new Set([
   'meeting:offer',
   'meeting:answer',
   'meeting:ice',
+  'live:offer',
+  'live:answer',
+  'live:ice',
+  'live:leave',
+  'live:end',
 ]);
 
 function toClientSignal(signal) {
@@ -84,6 +90,13 @@ export async function createCallSignal(req, res) {
       const allowed = await canUserInviteToCall(req.user._id, recipientId);
       if (!allowed) {
         return res.status(403).json({ success: false, error: 'Call invitation blocked by user privacy settings' });
+      }
+    }
+
+    if (event.startsWith('live:')) {
+      const allowed = await canRelayLiveSignal(req.user._id, recipientId, callId.trim());
+      if (!allowed) {
+        return res.status(403).json({ success: false, error: 'Not a participant in this live stream' });
       }
     }
 

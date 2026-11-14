@@ -8,6 +8,7 @@ import User from '../models/User.js';
 import { incrementCiphertextsRelayed } from '../services/blindnessStats.js';
 import { clearMessageNotifications, createNotification, isUserOnline, upsertMessageNotification } from '../services/notificationService.js';
 import { notifyUser } from '../services/pushService.js';
+import { isConversationLocked } from '../utils/chatLock.js';
 import { conversationKey, parseConversationKey } from '../utils/conversationKey.js';
 import { notExpiredFilter, resolveExpiresAt } from '../utils/messageExpiry.js';
 import { sealForPublicKey } from '../utils/sealedBox.js';
@@ -1025,6 +1026,12 @@ export async function getConversation(req, res) {
     if (!peerOid) {
       return res.status(400).json({ success: false, error: 'Invalid user id' });
     }
+    if (
+      !req.chatLockUnlocked &&
+      isConversationLocked(req.user, conversationKey({ from: req.user._id, to: peerOid }))
+    ) {
+      return res.status(423).json({ success: false, code: 'CHAT_LOCKED', error: 'This chat is locked' });
+    }
 
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 80, 1), 200);
     const before = req.query.before ? new Date(req.query.before) : null;
@@ -1232,6 +1239,23 @@ export async function syncMessages(req, res) {
         }
       }
     }
+    const lockExclusions = [];
+    if (!req.chatLockUnlocked) {
+      for (const entry of req.user.lockedChats || []) {
+        const parts = parseConversationKey(entry?.conversationKey);
+        if (!parts) continue;
+        if (parts.group) {
+          const gid = toObjectId(parts.group);
+          if (gid) lockExclusions.push({ group: gid });
+        } else if (parts.dm) {
+          const peerRaw = parts.dm.find((id) => String(id) !== String(myId)) || parts.dm[0];
+          const peerOid = toObjectId(peerRaw);
+          if (peerOid) {
+            lockExclusions.push({ $or: [ { from: myId, to: peerOid }, { from: peerOid, to: myId } ] });
+          }
+        }
+      }
+    }
 
     const filter = {
       $and: [
@@ -1246,6 +1270,7 @@ export async function syncMessages(req, res) {
         notExpiredFilter(),
         scopeFilter,
         ...(clearExclusions.length ? [{ $nor: clearExclusions }] : []),
+        ...(lockExclusions.length ? [{ $nor: lockExclusions }] : []),
       ],
     };
 

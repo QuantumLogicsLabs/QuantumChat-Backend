@@ -507,6 +507,9 @@ export async function updateNotificationSettings(req, res) {
     if (typeof settings.birthdayReminders === 'boolean') {
       user.notificationSettings.birthdayReminders = settings.birthdayReminders;
     }
+    if (typeof settings.liveNotifications === 'boolean') {
+      user.notificationSettings.liveNotifications = settings.liveNotifications;
+    }
     if (typeof settings.soundVolume === 'number' && settings.soundVolume >= 0 && settings.soundVolume <= 100) {
       user.notificationSettings.soundVolume = settings.soundVolume;
     }

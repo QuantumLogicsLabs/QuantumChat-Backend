@@ -1,25 +1,26 @@
 import { Router } from 'express';
 import {
-  sendMessage,
-  getConversation,
-  syncMessages,
-  markConversationRead,
-  deleteMessage,
-  reactToMessage,
-  editMessage,
-  publishQuantumAIDirectResponse,
   checkForwardAllowed,
-  openViewOnce,
-  upsertTranscriptState,
-  markVoiceListened,
-  getMessageInfo,
+  deleteMessage,
+  editMessage,
+  getConversation,
   getImportantMessages,
+  getMessageInfo,
+  markConversationRead,
   markMessageImportant,
+  markVoiceListened,
+  openViewOnce,
+  publishQuantumAIDirectResponse,
+  reactToMessage,
+  sendMessage,
+  syncMessages,
   unmarkMessageImportant,
+  upsertTranscriptState,
 } from '../controllers/messageController.js';
 import { requireAuthLean } from '../middleware/auth.js';
-import { readVaultUnlock } from '../middleware/vaultAuth.js';
+import { readChatUnlock } from '../middleware/chatLockAuth.js';
 import { apiLimiter, syncLimiter } from '../middleware/rateLimiter.js';
+import { readVaultUnlock } from '../middleware/vaultAuth.js';
 const router = Router();
 
 // Sub-router for /sync so syncLimiter is applied via a bare router-level
@@ -32,7 +33,7 @@ const syncRouter = Router();
 // what CodeQL's "missing rate limiting" check requires: nothing gated the
 // requireAuth step itself. syncLimiter stays after requireAuth since it's
 // keyed on req.user._id.
-syncRouter.use(apiLimiter,requireAuthLean, readVaultUnlock, syncLimiter);
+syncRouter.use(apiLimiter,requireAuthLean, readVaultUnlock, readChatUnlock, syncLimiter);
 syncRouter.get('/', syncMessages);
 
 // Declared before the router-level middleware and before '/:userId', for two
@@ -43,6 +44,7 @@ router.use('/sync', syncRouter);
 
 router.use(apiLimiter);
 router.use(requireAuthLean);
+router.use(readChatUnlock);
 router.use(readVaultUnlock);
 router.post('/', sendMessage);
 router.post('/quantum-ai-response', publishQuantumAIDirectResponse);

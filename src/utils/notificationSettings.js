@@ -8,6 +8,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS = {
   vibration: 'on',
   doNotDisturb: { enabled: false, startTime: '22:00', endTime: '07:00', allowedContacts: [] },
   groupNotifications: 'all',
+  liveNotifications: true,
   callNotifications: {
     voiceCallEnabled: true,
     videoCallEnabled: true,
@@ -30,6 +31,11 @@ export function normalizeNotificationSettings(raw) {
   return {
     ...DEFAULT_NOTIFICATION_SETTINGS,
     ...src,
+    // Legacy name for 'selected' (see the pre-validate hook in User.js).
+    statusNotifications:
+      src.statusNotifications === 'favorites_only'
+        ? 'selected'
+        : src.statusNotifications || DEFAULT_NOTIFICATION_SETTINGS.statusNotifications,
     statusNotificationsSelectedFriends: Array.isArray(src.statusNotificationsSelectedFriends)
       ? src.statusNotificationsSelectedFriends.map((id) => String(id._id || id))
       : [],

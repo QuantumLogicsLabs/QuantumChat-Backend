@@ -17,12 +17,14 @@ import deviceLinkRoutes from './routes/deviceLinkRoutes.js';
 import gifRoutes from './routes/gifRoutes.js';
 import groupRoutes from './routes/groupRoutes.js';
 import highlightRoutes from './routes/highlightRoutes.js';
+import liveStreamRoutes from './routes/liveStreamRoutes.js';
 import messageRoutes from './routes/messageRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import presenceRoutes from './routes/presenceRoutes.js';
 import publicApiRoutes from './routes/publicApiRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import storyRoutes from './routes/storyRoutes.js';
+import savedReplyRoutes from './routes/savedReplyRoutes.js';
 import trustRoutes from './routes/trustRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import {
@@ -69,7 +71,7 @@ export function createApp() {
         return callback(null, false);
       },
       methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id', 'X-API-Key', 'x-vault-token'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id', 'X-API-Key', 'x-vault-token', 'x-chat-lock-token'],
       optionsSuccessStatus: 204,
     })
   );
@@ -161,8 +163,10 @@ app.use('/api/notifications', notificationRoutes);
   app.use('/api/reports', reportRoutes);
   app.use('/api/trust', trustRoutes);
   app.use('/api/call-signals', callSignalRoutes);
+  app.use('/api/live', liveStreamRoutes);
   app.use('/api/presence', presenceRoutes);
   app.use('/api/chat-themes', chatThemeRoutes);
+  app.use('/api/saved-replies', savedReplyRoutes);
   // Server-to-server integration surface for other QuantumLogics sites,
   // authenticated with an X-API-Key header instead of a user JWT.
   app.use('/api/public/v1', (req, res, next) => {

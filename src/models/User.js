@@ -122,6 +122,8 @@ const notificationSettingsSchema = new mongoose.Schema(
     },
      /** Whether this user wants a reminder 5 minutes before a friend's birthday begins. */
     birthdayReminders: { type: Boolean, default: true },
+    /** Notify when a friend (or a group this user is in) goes live. */
+    liveNotifications: { type: Boolean, default: true },
     doNotDisturb: {
       enabled: { type: Boolean, default: false },
       startTime: { type: String, default: '22:00' },
@@ -173,6 +175,18 @@ const mutedChatSchema = new mongoose.Schema(
     expiresAt: { type: Date, default: null }, // null = muted forever ("Always")
   },
   { _id: false }
+);
+// User-defined chat folders ("Work", "Family"), shown beside the All/Unread/
+// Groups filters. Purely an organising aid for the owner — never exposed to
+// anyone else. Keys use the client's per-viewer format (`dm:<peerId>` /
+// `group:<groupId>`), which is unambiguous because the list is per-user.
+const chatFolderSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true, maxlength: 24 },
+    conversationKeys: { type: [String], default: [] },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
 );
 // Per-user "clear chat" watermark. When a user clears a conversation, we record
 // the moment here rather than deleting any shared message documents — clearing
@@ -300,6 +314,18 @@ const userSchema = new mongoose.Schema(
         addedAt: { type: Date, default: Date.now },
       },
     ],
+    // Chat Lock: one PIN per user, plus the set of conversations it protects.
+    chatLockPinHash: { type: String, select: false, default: null },
+    chatLockEnabled: { type: Boolean, default: false },
+    chatLockFailedAttempts: { type: Number, default: 0, select: false },
+    chatLockLockedUntil: { type: Date, default: null, select: false },
+    lockedChats: [
+      {
+        _id: false,
+        conversationKey: { type: String, required: true },
+        addedAt: { type: Date, default: Date.now },
+      },
+    ],
     publicKeys: {
       type: [String],
       required: true,
@@ -345,6 +371,10 @@ const userSchema = new mongoose.Schema(
     },
     mutedChats: {
       type: [mutedChatSchema],
+      default: [],
+    },
+    chatFolders: {
+      type: [chatFolderSchema],
       default: [],
     },
     clearedConversations: {
@@ -448,6 +478,18 @@ friends: [
   { timestamps: true }
 );
 
+// Older builds stored statusNotifications: 'favorites_only', later renamed to
+// 'selected'. Mongoose validates the whole document on save, so an account
+// still carrying the old value failed *every* save (chat folders, mute, ...).
+// Upgrade it in place before validation runs.
+userSchema.pre('validate', function upgradeLegacyNotificationSettings(next) {
+  const ns = this.notificationSettings;
+  if (ns && ns.statusNotifications === 'favorites_only') {
+    ns.statusNotifications = 'selected';
+  }
+  next();
+});
+
 userSchema.pre('save', function generateReferralCode(next) {
   if (!this.referralCode) {
     this.referralCode = crypto.randomBytes(4).toString('hex');
@@ -476,6 +518,17 @@ userSchema.methods.createVaultUnlockToken = function createVaultUnlockToken() {
     { algorithm: 'HS256', expiresIn: '15m' }
   );
 };
+userSchema.methods.compareChatLockPin = function compareChatLockPin(candidate) {
+      if (!this.chatLockPinHash) return Promise.resolve(false);
+      return bcrypt.compare(String(candidate || ''), this.chatLockPinHash);
+    };
+    userSchema.methods.createChatLockToken = function createChatLockToken() {
+      return jwt.sign(
+        { sub: String(this._id), scope: 'chatlock' },
+        process.env.JWT_SECRET,
+        { algorithm: 'HS256', expiresIn: '10m' }
+      );
+    };
 userSchema.methods.createEmailVerifyToken = function createEmailVerifyToken() {
   const token = crypto.randomBytes(32).toString('hex');
   this.emailVerifyToken = crypto.createHash('sha256').update(token).digest('hex');
@@ -650,6 +703,11 @@ userSchema.methods.toSelfJSON = function toSelfJSON() {
       conversationKey: m.conversationKey,
       expiresAt: m.expiresAt,
     })) : [],
+    chatFolders: Array.isArray(this.chatFolders) ? this.chatFolders.map((f) => ({
+      id: String(f._id),
+      name: f.name,
+      conversationKeys: (f.conversationKeys || []).map(String),
+    })) : [],
     clearedConversations: Array.isArray(this.clearedConversations) ? this.clearedConversations.map((c) => ({
       conversationKey: c.conversationKey,
       clearedAt: c.clearedAt,
@@ -660,6 +718,8 @@ userSchema.methods.toSelfJSON = function toSelfJSON() {
       markedAt: entry.markedAt,
     })) : [],
     totpEnabled: Boolean(this.totpEnabled),
+    chatLockEnabled: Boolean(this.chatLockEnabled),
+    lockedChats: Array.isArray(this.lockedChats) ? this.lockedChats.map((l) => l.conversationKey) : [],
     referralCode: this.referralCode || null,
     hasSeenTour: Boolean(this.hasSeenTour),
   };

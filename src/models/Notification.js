@@ -10,9 +10,10 @@ const NOTIFICATION_TYPES = [
   'STORY_REPLY',
   'GROUP_EVENT',
   'MISSED_CALL',
+  'LIVE_STARTED',
 ];
 
-const ENTITY_TYPES = ['friend_request', 'message', 'group', 'story', 'call'];
+const ENTITY_TYPES = ['friend_request', 'message', 'group', 'story', 'call', 'live'];
 
 const notificationSchema = new mongoose.Schema(
   {

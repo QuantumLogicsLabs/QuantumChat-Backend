@@ -5,6 +5,7 @@ import User from '../models/User.js';
 import { createNotification } from '../services/notificationService.js';
 import { notifyUser } from '../services/pushService.js';
 import { canUserInviteToCall, isSealedEnvelope } from '../utils/callEnvelope.js';
+import { canRelayLiveSignal } from '../utils/liveAccess.js';
 import { canViewerSeeUserOnline } from '../utils/presencePrivacy.js';
 const onlineUsers = new Map(); // userId -> Set(socketId)
 
@@ -221,6 +222,10 @@ export function attachSocket(io) {
         const allowed = await canUserInviteToCall(userId, to);
         if (!allowed) return;
       }
+      if (eventName.startsWith('live:')) {
+        const allowed = await canRelayLiveSignal(userId, to, callId).catch(() => false);
+        if (!allowed) return;
+      }
 
       io.to(String(to)).emit(eventName, {
         from: userId,
@@ -286,6 +291,13 @@ export function attachSocket(io) {
     socket.on('meeting:offer', (payload = {}) => relaySealedEnvelope('meeting:offer', payload));
     socket.on('meeting:answer', (payload = {}) => relaySealedEnvelope('meeting:answer', payload));
     socket.on('meeting:ice', (payload = {}) => relaySealedEnvelope('meeting:ice', payload));
+
+    // Live streams: host <-> admitted viewer only (enforced in relaySealedEnvelope).
+    socket.on('live:offer', (payload = {}) => relaySealedEnvelope('live:offer', payload));
+    socket.on('live:answer', (payload = {}) => relaySealedEnvelope('live:answer', payload));
+    socket.on('live:ice', (payload = {}) => relaySealedEnvelope('live:ice', payload));
+    socket.on('live:leave', (payload = {}) => relaySealedEnvelope('live:leave', payload));
+    socket.on('live:end', (payload = {}) => relaySealedEnvelope('live:end', payload));
     socket.on('message:delivered', async ({ messageId } = {}) => {
       try {
         if (!messageId) return;
