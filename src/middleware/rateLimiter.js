@@ -17,7 +17,7 @@ export const authLimiter = rateLimit({
 /** General authenticated API limiter (CodeQL missing-rate-limiting). */
 export const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: Number(process.env.API_RATE_LIMIT) || 120,
+  limit: Number(process.env.API_RATE_LIMIT) || (process.env.NODE_ENV === "production" ? 120 : 1200),
   standardHeaders: true,
   legacyHeaders: false,
   message: {
