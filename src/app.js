@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 import { allowedOrigins } from './config/corsOrigins.js';
 import { runBirthdayNotifications } from './jobs/birthdayNotifications.js';
 import { runStoryPublishJobs } from './jobs/publishScheduledStories.js';
+import { runReminderJobs } from './jobs/sendReminders.js';
 import { runTimeCapsuleDelivery } from './jobs/timeCapsuleDelivery.js';
 import { publicApiIpLimiter } from './middleware/apiKeyAuth.js';
 import { authLimiter } from './middleware/rateLimiter.js';
@@ -22,6 +23,7 @@ import messageRoutes from './routes/messageRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import presenceRoutes from './routes/presenceRoutes.js';
 import publicApiRoutes from './routes/publicApiRoutes.js';
+import reminderRoutes from './routes/reminderRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import storyRoutes from './routes/storyRoutes.js';
 import trustRoutes from './routes/trustRoutes.js';
@@ -129,6 +131,20 @@ app.use('/api/activity', activityRoutes);
       }
     });
 
+    app.get('/api/cron/reminders', async (req, res) => {
+      const provided = req.headers['x-cron-secret'] || req.query.secret;
+      if (!process.env.CRON_SECRET || provided !== process.env.CRON_SECRET) {
+        return res.status(401).json({ success: false, error: 'Unauthorized' });
+      }
+      try {
+        const sentCount = await runReminderJobs();
+        res.json({ success: true, data: { sentCount } });
+      } catch (err) {
+        console.error('Reminder cron failed:', err.message);
+        res.status(500).json({ success: false, error: 'Sweep failed' });
+      }
+    });
+
         app.get('/api/cron/time-capsules', async (req, res) => {
   const provided = req.headers['x-cron-secret'];
   if (!process.env.CRON_SECRET || provided !== process.env.CRON_SECRET) {
@@ -158,6 +174,7 @@ app.use('/api/notifications', notificationRoutes);
   app.use('/api/attachments', attachmentRoutes);
   app.use('/api/groups', groupRoutes);
   app.use('/api/stories', storyRoutes);
+   app.use('/api/reminders', reminderRoutes);
   app.use('/api/highlights', highlightRoutes);
   app.use('/api/reports', reportRoutes);
   app.use('/api/trust', trustRoutes);
