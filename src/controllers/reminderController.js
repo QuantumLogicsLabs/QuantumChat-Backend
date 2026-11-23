@@ -1,7 +1,7 @@
-import mongoose from 'mongoose';
 import Reminder from '../models/Reminder.js';
 import Message from '../models/Message.js';
 import Group from '../models/Group.js';
+import { toObjectId } from '../utils/toObjectId.js';
 
 const MIN_LEAD_MS = 30 * 1000; // must be at least 30s in the future
 const MAX_LEAD_MS = 365 * 24 * 60 * 60 * 1000; // and at most a year out
@@ -27,8 +27,11 @@ async function canAccessMessage(userId, message) {
 /** POST /reminders  { messageId, remindAt }  — creates or reschedules. */
 export async function createReminder(req, res) {
   try {
-    const { messageId, remindAt } = req.body || {};
-    if (!mongoose.isValidObjectId(messageId)) {
+    const { remindAt } = req.body || {};
+    // Cast to a real ObjectId so a crafted body like { "$ne": null } can never
+    // reach a query (this is what CodeQL's NoSQL-injection check looks for).
+    const messageId = toObjectId(req.body?.messageId);
+    if (!messageId) {
       return res.status(400).json({ success: false, error: 'Invalid message' });
     }
     const when = new Date(remindAt);
@@ -73,10 +76,11 @@ export async function listReminders(req, res) {
   try {
     const query = { user: req.user._id, sentAt: null };
     if (req.query.messageId) {
-      if (!mongoose.isValidObjectId(req.query.messageId)) {
+      const messageId = toObjectId(req.query.messageId);
+      if (!messageId) {
         return res.status(400).json({ success: false, error: 'Invalid message' });
       }
-      query.messageId = req.query.messageId;
+      query.messageId = messageId;
     }
     const reminders = await Reminder.find(query).sort({ remindAt: 1 }).limit(MAX_PENDING_PER_USER);
     res.json({ success: true, data: reminders.map(toClient) });
@@ -88,11 +92,12 @@ export async function listReminders(req, res) {
 /** DELETE /reminders/:id  — cancel a pending reminder (scoped to the caller). */
 export async function deleteReminder(req, res) {
   try {
-    if (!mongoose.isValidObjectId(req.params.id)) {
+    const reminderId = toObjectId(req.params.id);
+    if (!reminderId) {
       return res.status(400).json({ success: false, error: 'Invalid reminder' });
     }
-    await Reminder.deleteOne({ _id: req.params.id, user: req.user._id, sentAt: null });
-    res.json({ success: true, data: { id: req.params.id } });
+    await Reminder.deleteOne({ _id: reminderId, user: req.user._id, sentAt: null });
+    res.json({ success: true, data: { id: String(reminderId) } });
   } catch {
     res.status(500).json({ success: false, error: 'Could not delete reminder' });
   }
