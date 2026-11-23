@@ -470,6 +470,10 @@ friends: [
       ref: 'User',
       default: null,
     },
+    hasSeenTour: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
@@ -717,6 +721,7 @@ userSchema.methods.toSelfJSON = function toSelfJSON() {
     chatLockEnabled: Boolean(this.chatLockEnabled),
     lockedChats: Array.isArray(this.lockedChats) ? this.lockedChats.map((l) => l.conversationKey) : [],
     referralCode: this.referralCode || null,
+    hasSeenTour: Boolean(this.hasSeenTour),
   };
 };
 
