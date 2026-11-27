@@ -7,10 +7,10 @@ import http from "http";
 import { Server } from "socket.io";
 import { createApp } from "./src/app.js";
 import { connectDB } from "./src/config/db.js";
-import { allowedOrigins } from "./src/config/corsOrigins.js";
 import { runBirthdayNotifications } from "./src/jobs/birthdayNotifications.js";
 import { runExpiryJobs } from "./src/jobs/expireMessages.js";
 import { runStoryPublishJobs } from "./src/jobs/publishScheduledStories.js";
+import { runReminderJobs } from "./src/jobs/sendReminders.js";
 import FriendRequest from "./src/models/FriendRequest.js";
 import { attachSocket } from "./src/socket/index.js";
 
@@ -55,6 +55,11 @@ async function main() {
   setTimeout(() => {
     runStoryPublishJobs(io).catch((err) => console.error("Story publish job failed:", err.message));
   }, 8_000);
+
+  const REMINDER_INTERVAL_MS = 30_000;
+  setInterval(() => {
+    runReminderJobs().catch((err) => console.error("Reminder job failed:", err.message));
+  }, REMINDER_INTERVAL_MS);
 
   const BIRTHDAY_CHECK_INTERVAL_MS = 60_000; // must stay <= the job's 1-minute window
   setInterval(() => {
